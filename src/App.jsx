@@ -259,10 +259,35 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
   );
 }
 
-// ─── Member Form ───
+// ─── Member Form (회원별 운동 중량/횟수 커스텀 설정) ───
 function MemberForm({ member, programs, onSave, onCancel }) {
-  const [m, setM] = useState({ ...member });
+  const [m, setM] = useState({ ...member, customExercises: member.customExercises || {} });
   const u = (f, v) => setM((p) => ({ ...p, [f]: v }));
+
+  // 프로그램 변경 시 customExercises 초기화
+  const handleProgramChange = (progId) => {
+    const prog = programs.find((p) => p.id === progId);
+    const custom = {};
+    if (prog) {
+      prog.days.forEach((day, di) => {
+        day.exercises.forEach((ex, ei) => {
+          const key = `${di}-${ei}`;
+          // 기존 값 유지 or 프로그램 기본값
+          custom[key] = m.customExercises?.[key] || { weight: "", reps: ex.reps };
+        });
+      });
+    }
+    setM((p) => ({ ...p, programId: progId, customExercises: custom }));
+  };
+
+  const updateCustom = (key, field, value) => {
+    setM((p) => ({
+      ...p, customExercises: { ...p.customExercises, [key]: { ...p.customExercises[key], [field]: value } }
+    }));
+  };
+
+  const selectedProg = programs.find((p) => p.id === m.programId);
+
   return (
     <div style={S.container}>
       <BackBtn onClick={onCancel} label="취소"/>
@@ -275,10 +300,48 @@ function MemberForm({ member, programs, onSave, onCancel }) {
           <option value="beginner">초급</option><option value="intermediate">중급</option><option value="advanced">고급</option>
         </select></div>
       <div style={S.fg}><label style={S.label}>배정 프로그램</label>
-        <select style={S.input} value={m.programId} onChange={(e) => u("programId", e.target.value)}>
+        <select style={S.input} value={m.programId} onChange={(e) => handleProgramChange(e.target.value)}>
           <option value="">— 선택 —</option>
           {programs.map((p) => <option key={p.id} value={p.id}>[{LEVELS[p.level]?.label}] {p.name}</option>)}
         </select></div>
+
+      {/* 회원별 운동 중량/횟수 커스텀 설정 */}
+      {selectedProg && (
+        <>
+          <div style={S.divider}/>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#6a9fd8", marginBottom: 12 }}>
+            {m.name || "회원"}의 운동 설정
+          </div>
+          {selectedProg.days.map((day, di) => (
+            <div key={di} style={S.customDayBlock}>
+              <div style={S.customDayTitle}>{day.dayName}</div>
+              {day.exercises.map((ex, ei) => {
+                const key = `${di}-${ei}`;
+                const cv = m.customExercises?.[key] || { weight: "", reps: ex.reps };
+                return (
+                  <div key={ei} style={S.customExRow}>
+                    <span style={S.customExNum}>{ei + 1}</span>
+                    <span style={S.customExName}>{ex.name || `운동 ${ei+1}`}</span>
+                    <div style={S.customInputGroup}>
+                      <div style={S.customField}>
+                        <span style={S.miniL}>중량</span>
+                        <input style={S.customInput} type="number" inputMode="decimal" placeholder="kg"
+                          value={cv.weight} onChange={(e) => updateCustom(key, "weight", e.target.value)}/>
+                      </div>
+                      <div style={S.customField}>
+                        <span style={S.miniL}>횟수</span>
+                        <input style={S.customInput} inputMode="numeric" placeholder={ex.reps}
+                          value={cv.reps} onChange={(e) => updateCustom(key, "reps", e.target.value)}/>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </>
+      )}
+
       <div style={S.formAct}>
         <button style={S.cancelBtn} onClick={onCancel}>취소</button>
         <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={() => { if (!m.name.trim()) { alert("이름을 입력하세요"); return; } onSave(m); }}>저장</button>
@@ -293,10 +356,10 @@ function ProgramForm({ program, onSave, onCancel }) {
   const u = (f, v) => setP((prev) => ({ ...prev, [f]: v }));
   const uDay = (di, f, v) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], [f]: v }; return { ...prev, days: d }; });
   const uEx = (di, ei, f, v) => setP((prev) => { const d = [...prev.days]; const e = [...d[di].exercises]; e[ei] = { ...e[ei], [f]: f === "sets" ? (parseInt(v)||0) : v }; d[di] = { ...d[di], exercises: e }; return { ...prev, days: d }; });
-  const addDay = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: [{ name: "", sets: 3, reps: "10", weight: "", note: "" }] }] }));
+  const addDay = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: [{ name: "", sets: 3, reps: "10", note: "" }] }] }));
   const copyDay1 = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: JSON.parse(JSON.stringify(prev.days[0].exercises)) }] }));
   const rmDay = (di) => setP((prev) => ({ ...prev, days: prev.days.filter((_, i) => i !== di) }));
-  const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", weight: "", note: "" }] }; return { ...prev, days: d }; });
+  const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", note: "" }] }; return { ...prev, days: d }; });
   const rmEx = (di, ei) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: d[di].exercises.filter((_, i) => i !== ei) }; return { ...prev, days: d }; });
 
   return (
@@ -326,7 +389,6 @@ function ProgramForm({ program, onSave, onCancel }) {
               <div style={S.exEdRow}>
                 <div style={S.mini}><span style={S.miniL}>세트</span><input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(di, ei, "sets", e.target.value)}/></div>
                 <div style={S.mini}><span style={S.miniL}>횟수</span><input style={S.inputSm} value={ex.reps} onChange={(e) => uEx(di, ei, "reps", e.target.value)}/></div>
-                <div style={S.mini}><span style={S.miniL}>중량(kg)</span><input style={S.inputSm} value={ex.weight || ""} onChange={(e) => uEx(di, ei, "weight", e.target.value)} placeholder="0"/></div>
               </div>
               <input style={S.inputSm} placeholder="참고사항 (선택)" value={ex.note} onChange={(e) => uEx(di, ei, "note", e.target.value)}/>
             </div>
@@ -357,7 +419,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   const myLogs = useMemo(() => logs.filter((l) => l.memberId === session.memberId).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [logs, session.memberId]);
 
   if (screen === "workout" && program && selDay !== null) return (
-    <WorkoutSession program={program} dayIndex={selDay} memberId={session.memberId}
+    <WorkoutSession program={program} dayIndex={selDay} memberId={session.memberId} memberCustom={member?.customExercises}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
   );
@@ -409,14 +471,19 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 // ═══════════════════════════════════════
 // WORKOUT SESSION (시작/종료 시간 기록, 관리자 설정 중량 표시)
 // ═══════════════════════════════════════
-function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
+function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, onBack }) {
   const day = program.days[dayIndex];
   const [startTime] = useState(() => new Date().toISOString());
-  const [exData, setExData] = useState(day.exercises.map((ex) => ({
-    name: ex.name,
-    sets: Array.from({ length: ex.sets }, () => ({ weight: ex.weight || "", reps: ex.reps || "", done: false })),
-    targetReps: ex.reps, targetWeight: ex.weight || "", note: ex.note,
-  })));
+  const [exData, setExData] = useState(day.exercises.map((ex, ei) => {
+    const custom = memberCustom?.[`${dayIndex}-${ei}`];
+    const w = custom?.weight || ex.weight || "";
+    const r = custom?.reps || ex.reps || "";
+    return {
+      name: ex.name,
+      sets: Array.from({ length: ex.sets }, () => ({ weight: w, reps: r, done: false })),
+      targetReps: r, targetWeight: w, note: ex.note,
+    };
+  }));
   const [activeEx, setActiveEx] = useState(0);
 
   const uSet = (ei, si, f, v) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets] }; n[ei].sets[si] = { ...n[ei].sets[si], [f]: v }; return n; });
@@ -707,6 +774,16 @@ const S = {
   miniL: { fontSize: 10, color: "#666", fontWeight: 600 },
   addExBtn: { width: "100%", background: "none", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 8, padding: 8, color: "#666", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
   addDayBtn: { width: "100%", background: "rgba(106,159,216,0.06)", border: "1px dashed rgba(106,159,216,0.2)", borderRadius: 12, padding: 14, color: "#6a9fd8", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer", marginBottom: 16, fontFamily: "'Noto Sans KR', sans-serif" },
+
+  // Member Custom Exercise Settings
+  customDayBlock: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: 12, marginBottom: 10 },
+  customDayTitle: { fontSize: 13, fontWeight: 700, color: "#6a9fd8", marginBottom: 10, padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" },
+  customExRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" },
+  customExNum: { width: 22, height: 22, borderRadius: 6, background: "rgba(106,159,216,0.1)", color: "#6a9fd8", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0, fontFamily: "'JetBrains Mono'" },
+  customExName: { fontSize: 13, fontWeight: 500, color: "#ccc", flex: 1, minWidth: 80 },
+  customInputGroup: { display: "flex", gap: 6 },
+  customField: { display: "flex", flexDirection: "column", gap: 2 },
+  customInput: { width: 60, padding: "6px 8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#fff", fontSize: 13, textAlign: "center", fontFamily: "'JetBrains Mono'", outline: "none" },
 
   // Member Home
   todayDate: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6a9fd8", marginBottom: 16, padding: "8px 12px", background: "rgba(106,159,216,0.06)", borderRadius: 10, fontWeight: 500 },
