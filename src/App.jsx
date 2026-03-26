@@ -167,6 +167,12 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
   const [screen, setScreen] = useState("home");
   const [editMember, setEditMember] = useState(null);
   const [editProgram, setEditProgram] = useState(null);
+  const [viewingMember, setViewingMember] = useState(null);
+
+  if (screen === "memberLogs" && viewingMember) {
+    const mLogs = logs.filter((l) => l.memberId === viewingMember.id).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    return <AdminMemberLogs member={viewingMember} logs={mLogs} onBack={() => { setViewingMember(null); setScreen("members"); }}/>;
+  }
 
   if (screen === "memberForm" && editMember) return (
     <MemberForm member={editMember} programs={programs} onSave={(m) => { saveMember(m); setEditMember(null); setScreen("members"); }}
@@ -199,6 +205,7 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
                 </div>
               </div>
               <div style={{ display: "flex", gap: 4 }}>
+                <button style={{ ...S.iconBtn, color: "#6a9fd8" }} onClick={() => { setViewingMember(m); setScreen("memberLogs"); }} title="운동 기록"><I.Calendar/></button>
                 <button style={S.iconBtn} onClick={() => { setEditMember({ ...m }); setScreen("memberForm"); }}><I.Edit/></button>
                 <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => { if (confirm(`${m.name} 회원을 삭제하시겠습니까?`)) deleteMember(m.id); }}><I.Trash/></button>
               </div>
@@ -255,6 +262,54 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
         <button style={S.adminCard} onClick={() => setScreen("members")}><I.Users size={28} style={{ color: "#6a9fd8" }}/><div style={S.adminCardT}>회원 관리</div><div style={S.adminCardN}>{members.length}명</div></button>
         <button style={S.adminCard} onClick={() => setScreen("programs")}><I.Clipboard size={28} style={{ color: "#22c55e" }}/><div style={S.adminCardT}>프로그램</div><div style={S.adminCardN}>{programs.length}개</div></button>
       </div>
+    </div>
+  );
+}
+
+// ─── Admin: Member Logs (열람 + 삭제) ───
+function AdminMemberLogs({ member, logs, onBack }) {
+  const [expId, setExpId] = useState(null);
+  const grouped = useMemo(() => { const g = {}; logs.forEach((l) => { const d = fmtDate(l.timestamp); if (!g[d]) g[d] = []; g[d].push(l); }); return g; }, [logs]);
+
+  const deleteLog = (logId) => {
+    if (confirm("이 운동 기록을 삭제하시겠습니까?")) fbSet(`logs/${logId}`, null);
+  };
+
+  return (
+    <div style={S.container}>
+      <BackBtn onClick={onBack}/>
+      <div style={S.pageHead}>
+        <div>
+          <h2 style={S.pageTitle}>{member.name}의 기록</h2>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>총 {logs.length}회</div>
+        </div>
+      </div>
+      {logs.length === 0 ? <Empty icon="📋" text="운동 기록이 없습니다"/> :
+        Object.entries(grouped).map(([date, entries]) => (
+          <div key={date} style={{ marginBottom: 20 }}>
+            <div style={S.dateGrp}>{date}</div>
+            {entries.map((log) => (
+              <div key={log.id}>
+                <div style={{ ...S.logCard, cursor: "default" }}>
+                  <button style={{ flex: 1, background: "none", border: "none", color: "#e8e8e8", textAlign: "left", padding: 0, cursor: "pointer", fontFamily: "'Noto Sans KR'" }}
+                    onClick={() => setExpId(expId === log.id ? null : log.id)}>
+                    <span style={{ ...S.badgeSm, background: LEVELS[log.level]?.bg, color: LEVELS[log.level]?.color }}>{LEVELS[log.level]?.label}</span>
+                    <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{log.dayName}</div>
+                    <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>
+                      {fmtTime(log.startTime || log.timestamp)}
+                      {log.startTime && log.endTime && <span style={{ color: "#6a9fd8", marginLeft: 8 }}>{fmtDuration(log.startTime, log.endTime)}</span>}
+                    </div>
+                  </button>
+                  <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => deleteLog(log.id)}><I.Trash/></button>
+                </div>
+                {expId === log.id && <div style={S.logDet}>{log.exercises?.map((ex, i) => (
+                  <div key={i} style={{ marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#ccc", marginBottom: 3 }}>{ex.name}</div>
+                    {ex.sets?.map((s, si) => <div key={si} style={{ fontSize: 12, color: "#777", paddingLeft: 8, fontFamily: "'JetBrains Mono'" }}>세트 {si+1}: {s.weight||"–"}kg × {s.reps||"–"}회</div>)}</div>
+                ))}</div>}
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }
@@ -533,7 +588,6 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
             </div>
           ))}
         </div>
-        <button style={S.addSetBtn} onClick={() => addSet(activeEx)}><I.Plus size={14}/> 세트 추가</button>
       </div>
       <div style={S.wNav}>
         {activeEx > 0 && <button style={S.navBtn} onClick={() => setActiveEx((v) => v - 1)}>← 이전</button>}
