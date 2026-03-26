@@ -353,7 +353,20 @@ function ProgramForm({ program, onSave, onCancel }) {
           <button style={S.addExBtn} onClick={() => addEx(di)}><I.Plus size={14}/> 운동 추가</button>
         </div>
       ))}
-      <button style={S.addDayBtn} onClick={addDay}><I.Plus/> 루틴 일자 추가</button>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button style={{ ...S.addDayBtn, flex: 1 }} onClick={addDay}><I.Plus/> 빈 루틴 추가</button>
+        {p.days.length >= 1 && (
+          <button style={{ ...S.addDayBtn, flex: 1, background: "rgba(34,197,94,0.06)", borderColor: "rgba(34,197,94,0.2)", color: "#22c55e" }}
+            onClick={() => setP((prev) => ({
+              ...prev, days: [...prev.days, {
+                dayName: `Day ${prev.days.length + 1}`,
+                exercises: JSON.parse(JSON.stringify(prev.days[0].exercises))
+              }]
+            }))}>
+            Day 1 복사하여 추가
+          </button>
+        )}
+      </div>
       <div style={S.formAct}>
         <button style={S.cancelBtn} onClick={onCancel}>취소</button>
         <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={() => { if (!p.name.trim()) { alert("이름을 입력하세요"); return; } onSave(p); }}>저장</button>
