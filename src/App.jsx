@@ -117,11 +117,18 @@ export default function App() {
 function LoginScreen({ members, onLogin }) {
   const [tab, setTab] = useState("member");
   const [pin, setPin] = useState("");
-  const [sel, setSel] = useState(null);
+  const [memberName, setMemberName] = useState("");
   const [mPin, setMPin] = useState("");
   const [err, setErr] = useState("");
 
   const showErr = (msg) => { setErr(msg); setTimeout(() => setErr(""), 2000); };
+
+  const handleMemberLogin = () => {
+    const found = members.find((m) => m.name === memberName.trim());
+    if (!found) { showErr("등록되지 않은 이름입니다"); return; }
+    if (mPin !== found.pin) { showErr("비밀번호가 올바르지 않습니다"); return; }
+    onLogin({ type: "member", memberId: found.id, memberName: found.name });
+  };
 
   return (
     <div style={S.loginWrap}>
@@ -142,29 +149,14 @@ function LoginScreen({ members, onLogin }) {
           </div>
         ) : (
           <div style={S.loginForm}>
-            {members.length === 0 ? (
-              <div style={S.emptyLogin}><p style={{ color: "#888", fontSize: 14 }}>등록된 회원이 없습니다</p><p style={{ color: "#555", fontSize: 12, marginTop: 4 }}>관리자에게 문의하세요</p></div>
-            ) : !sel ? (
-              <><label style={S.label}>회원 선택</label>
-              <div style={S.memberList}>
-                {members.map((m) => (
-                  <button key={m.id} style={S.memberSelBtn} onClick={() => setSel(m)}>
-                    <div style={S.avatar}>{m.name[0]}</div>
-                    <div><div style={{ fontSize: 15, fontWeight: 600 }}>{m.name}</div>
-                    <div style={{ fontSize: 12, marginTop: 2, color: LEVELS[m.level]?.color }}>{LEVELS[m.level]?.label}</div></div>
-                  </button>
-                ))}
-              </div></>
-            ) : (
-              <>
-                <button style={S.backInline} onClick={() => { setSel(null); setMPin(""); setErr(""); }}><I.Back size={16}/> 다른 회원 선택</button>
-                <div style={S.selCard}><div style={S.avatar}>{sel.name[0]}</div><span style={{ fontWeight: 600 }}>{sel.name}</span></div>
-                <label style={S.label}>비밀번호 (4자리)</label>
-                <input type="password" inputMode="numeric" maxLength={4} value={mPin} onChange={(e) => setMPin(e.target.value.replace(/\D/g, ""))}
-                  placeholder="••••" style={S.pinInput} onKeyDown={(e) => e.key === "Enter" && (mPin === sel.pin ? onLogin({ type: "member", memberId: sel.id, memberName: sel.name }) : showErr("비밀번호가 올바르지 않습니다"))}/>
-                <button style={S.primaryBtn} onClick={() => mPin === sel.pin ? onLogin({ type: "member", memberId: sel.id, memberName: sel.name }) : showErr("비밀번호가 올바르지 않습니다")}>로그인</button>
-              </>
-            )}
+            <label style={S.label}>이름</label>
+            <input style={S.input} value={memberName} onChange={(e) => setMemberName(e.target.value)}
+              placeholder="이름을 입력하세요" onKeyDown={(e) => e.key === "Enter" && document.getElementById("member-pin")?.focus()}/>
+            <div style={{ height: 12 }}/>
+            <label style={S.label}>비밀번호 (4자리)</label>
+            <input id="member-pin" type="password" inputMode="numeric" maxLength={4} value={mPin} onChange={(e) => setMPin(e.target.value.replace(/\D/g, ""))}
+              placeholder="••••" style={S.pinInput} onKeyDown={(e) => e.key === "Enter" && handleMemberLogin()}/>
+            <button style={S.primaryBtn} onClick={handleMemberLogin}>로그인</button>
           </div>
         )}
         {err && <div style={S.errMsg}>{err}</div>}
@@ -349,7 +341,7 @@ function ProgramForm({ program, onSave, onCancel }) {
           </div>
           {day.exercises.map((ex, ei) => (
             <div key={ei} style={S.exEd}>
-              <div style={S.exEdRow}><input style={{ ...S.inputSm, flex: 2 }} placeholder="운동 이름" value={ex.name} onChange={(e) => uEx(di, ei, "name", e.target.value)}/><button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} onClick={() => rmEx(di, ei)}><I.Trash/></button></div>
+              <div style={S.exEdRow}><span style={S.exNum}>{ei + 1}</span><input style={{ ...S.inputSm, flex: 2 }} placeholder="운동 이름" value={ex.name} onChange={(e) => uEx(di, ei, "name", e.target.value)}/><button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} onClick={() => rmEx(di, ei)}><I.Trash/></button></div>
               <div style={S.exEdRow}>
                 <div style={S.mini}><span style={S.miniL}>세트</span><input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(di, ei, "sets", e.target.value)}/></div>
                 <div style={S.mini}><span style={S.miniL}>횟수</span><input style={S.inputSm} value={ex.reps} onChange={(e) => uEx(di, ei, "reps", e.target.value)}/></div>
@@ -427,19 +419,12 @@ function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
   const day = program.days[dayIndex];
   const [exData, setExData] = useState(day.exercises.map((ex) => ({
     name: ex.name, sets: Array.from({ length: ex.sets }, () => ({ weight: "", reps: "", done: false })),
-    targetReps: ex.reps, rest: ex.rest, note: ex.note,
+    targetReps: ex.reps, note: ex.note,
   })));
   const [activeEx, setActiveEx] = useState(0);
-  const [timer, setTimer] = useState(null);
-  const [timerVal, setTimerVal] = useState(0);
-
-  useEffect(() => {
-    if (timer !== null && timerVal > 0) { const t = setTimeout(() => setTimerVal((v) => v - 1), 1000); return () => clearTimeout(t); }
-    if (timer !== null && timerVal === 0) { setTimer(null); try { navigator.vibrate?.(200); } catch {} }
-  }, [timer, timerVal]);
 
   const uSet = (ei, si, f, v) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets] }; n[ei].sets[si] = { ...n[ei].sets[si], [f]: v }; return n; });
-  const toggleDone = (ei, si) => { const was = exData[ei].sets[si].done; uSet(ei, si, "done", !was); if (!was) { setTimer(Date.now()); setTimerVal(parseInt(exData[ei].rest) || 60); } };
+  const toggleDone = (ei, si) => { uSet(ei, si, "done", !exData[ei].sets[si].done); };
   const addSet = (ei) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets, { weight: "", reps: "", done: false }] }; return n; });
 
   const total = exData.reduce((a, e) => a + e.sets.length, 0);
@@ -448,12 +433,6 @@ function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
 
   return (
     <div style={S.container}>
-      {timer !== null && (
-        <div style={S.timerOv} onClick={() => setTimer(null)}>
-          <div style={S.timerCirc}><div style={S.timerV}>{timerVal}</div><div style={{ fontSize: 14, color: "#888" }}>휴식 중</div></div>
-          <div style={{ marginTop: 24, fontSize: 13, color: "#555" }}>탭하여 건너뛰기</div>
-        </div>
-      )}
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 16 }}>
         <button style={S.backSm} onClick={onBack}><I.Back/></button>
         <div style={{ flex: 1 }}>
@@ -467,8 +446,8 @@ function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
         return <button key={i} style={{ ...S.exTab, ...(i === activeEx ? S.exTabOn : {}), ...(allDone ? S.exTabDone : {}) }} onClick={() => setActiveEx(i)}>{allDone ? "✓" : i + 1}</button>;
       })}</div>
       <div style={S.curEx}>
-        <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}>{ex.name}</h3>
-        <div style={{ display: "flex", gap: 16, fontSize: 13, color: "#888", marginBottom: 8 }}><span>목표: {ex.targetReps}회</span><span>휴식: {ex.rest}</span></div>
+        <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}><span style={S.exNumDisplay}>{activeEx + 1}</span>{ex.name}</h3>
+        <div style={{ fontSize: 13, color: "#888", marginBottom: 8 }}>목표: {ex.targetReps}회</div>
         {ex.note && <div style={S.exNote}>{ex.note}</div>}
         <div style={{ marginTop: 12 }}>
           <div style={S.setHead}><span style={S.setHC}>세트</span><span style={S.setHCW}>무게(kg)</span><span style={S.setHCW}>횟수</span><span style={S.setHC}>완료</span></div>
@@ -622,6 +601,8 @@ const S = {
   dayEdHead: { display: "flex", gap: 8, alignItems: "center", marginBottom: 10 },
   exEd: { background: "rgba(255,255,255,0.02)", borderRadius: 10, padding: 10, marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 },
   exEdRow: { display: "flex", gap: 8, alignItems: "center" },
+  exNum: { width: 28, height: 28, borderRadius: 8, background: "rgba(106,159,216,0.15)", color: "#6a9fd8", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace" },
+  exNumDisplay: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 7, background: "rgba(106,159,216,0.15)", color: "#6a9fd8", fontSize: 13, fontWeight: 700, marginRight: 8, fontFamily: "'JetBrains Mono', monospace" },
   mini: { flex: 1, display: "flex", flexDirection: "column", gap: 2 },
   miniL: { fontSize: 10, color: "#666", fontWeight: 600 },
   addExBtn: { width: "100%", background: "none", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 8, padding: 8, color: "#666", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
@@ -661,9 +642,6 @@ const S = {
   navBtn: { flex: 1, padding: "14px", borderRadius: 12, fontSize: 15, fontWeight: 600, cursor: "pointer", border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: "#aaa", fontFamily: "'Noto Sans KR', sans-serif" },
   navBtnPri: { background: "rgba(106,159,216,0.15)", borderColor: "rgba(106,159,216,0.3)", color: "#6a9fd8" },
   finBtn: { background: "linear-gradient(135deg, #4a7ab5, #6a9fd8)", borderColor: "transparent", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
-  timerOv: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" },
-  timerCirc: { width: 180, height: 180, borderRadius: "50%", border: "4px solid #6a9fd8", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" },
-  timerV: { fontSize: 56, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "#6a9fd8" },
 
   // History
   dateGrp: { fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid rgba(255,255,255,0.04)" },
