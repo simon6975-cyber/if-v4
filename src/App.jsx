@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, onValue, push, get } from "firebase/database";
+import { getDatabase, ref, set, onValue } from "firebase/database";
 
 // ═══════════════════════════════════════
 // FIREBASE
@@ -14,16 +14,10 @@ const firebaseConfig = {
   messagingSenderId: "157369526558",
   appId: "1:157369526558:web:3b9014c72055e89b45010f"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-
-// Firebase helper: write
 function fbSet(path, val) { return set(ref(db, `if-fitness/${path}`), val); }
-// Firebase helper: push new item
-function fbPush(path, val) { return push(ref(db, `if-fitness/${path}`), val); }
 
-// Hook: subscribe to a Firebase path and return live data
 function useFirebase(path, fallback = null) {
   const [data, setData] = useState(fallback);
   const [loaded, setLoaded] = useState(false);
@@ -37,7 +31,6 @@ function useFirebase(path, fallback = null) {
   return [data, loaded];
 }
 
-// Session is local-only (each device has its own login)
 function getSession() { try { return JSON.parse(localStorage.getItem("if-session-v2")); } catch { return null; } }
 function saveSession(s) { localStorage.setItem("if-session-v2", JSON.stringify(s)); }
 
@@ -57,6 +50,8 @@ const I = {
   Logout: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
   Fire: (p) => <svg width={p?.size||16} height={p?.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 12c2-2.96 0-7-1-8 0 3.038-1.773 4.741-3 6-1.226 1.26-2 3.24-2 5a6 6 0 1012 0c0-1.532-1.056-3.94-2-5-1.786 3-2 2-4 2z"/></svg>,
   Clipboard: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>,
+  Chart: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  Clock: (p) => <svg width={p?.size||16} height={p?.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
 };
 
 const ADMIN_PIN = "0000";
@@ -67,6 +62,19 @@ const LEVELS = {
 };
 
 // ═══════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════
+function fmtDate(d) { return new Date(d).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" }); }
+function fmtTime(d) { return new Date(d).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }); }
+function fmtDuration(start, end) {
+  const diff = Math.floor((new Date(end) - new Date(start)) / 1000);
+  const m = Math.floor(diff / 60); const s = diff % 60;
+  return m > 0 ? `${m}분 ${s}초` : `${s}초`;
+}
+function getWeekKey(d) { const dt = new Date(d); const jan1 = new Date(dt.getFullYear(), 0, 1); const days = Math.floor((dt - jan1) / 86400000); return `${dt.getFullYear()}-W${String(Math.ceil((days + jan1.getDay() + 1) / 7)).padStart(2, "0")}`; }
+function getMonthKey(d) { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`; }
+
+// ═══════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════
 export default function App() {
@@ -75,26 +83,16 @@ export default function App() {
   const [logsRaw, logsLoaded] = useFirebase("logs", {});
   const [session, setSession] = useState(() => getSession());
 
-  // Convert Firebase objects to arrays
   const members = useMemo(() => membersRaw ? Object.values(membersRaw) : [], [membersRaw]);
   const programs = useMemo(() => programsRaw ? Object.values(programsRaw) : [], [programsRaw]);
   const logs = useMemo(() => logsRaw ? Object.values(logsRaw) : [], [logsRaw]);
-
   const loaded = membersLoaded && programsLoaded && logsLoaded;
 
-  // Member CRUD (writes to Firebase)
   const saveMember = useCallback((m) => fbSet(`members/${m.id}`, m), []);
   const deleteMember = useCallback((id) => fbSet(`members/${id}`, null), []);
-
-  // Program CRUD
   const saveProgram = useCallback((p) => fbSet(`programs/${p.id}`, p), []);
   const deleteProgram = useCallback((id) => fbSet(`programs/${id}`, null), []);
-
-  // Logs
-  const addLog = useCallback((entry) => {
-    const logEntry = { ...entry, id: Date.now().toString(), timestamp: new Date().toISOString() };
-    fbSet(`logs/${logEntry.id}`, logEntry);
-  }, []);
+  const addLog = useCallback((entry) => { const l = { ...entry, id: Date.now().toString() }; fbSet(`logs/${l.id}`, l); }, []);
 
   const handleLogin = useCallback((s) => { setSession(s); saveSession(s); }, []);
   const logout = useCallback(() => { setSession(null); saveSession(null); }, []);
@@ -112,7 +110,7 @@ export default function App() {
 }
 
 // ═══════════════════════════════════════
-// LOGIN
+// LOGIN (이름 + PIN 직접 입력, 회원 목록 안 보임)
 // ═══════════════════════════════════════
 function LoginScreen({ members, onLogin }) {
   const [tab, setTab] = useState("member");
@@ -120,16 +118,13 @@ function LoginScreen({ members, onLogin }) {
   const [memberName, setMemberName] = useState("");
   const [mPin, setMPin] = useState("");
   const [err, setErr] = useState("");
-
   const showErr = (msg) => { setErr(msg); setTimeout(() => setErr(""), 2000); };
-
   const handleMemberLogin = () => {
     const found = members.find((m) => m.name === memberName.trim());
     if (!found) { showErr("등록되지 않은 이름입니다"); return; }
     if (mPin !== found.pin) { showErr("비밀번호가 올바르지 않습니다"); return; }
     onLogin({ type: "member", memberId: found.id, memberName: found.name });
   };
-
   return (
     <div style={S.loginWrap}>
       <div style={S.loginCard}>
@@ -150,8 +145,8 @@ function LoginScreen({ members, onLogin }) {
         ) : (
           <div style={S.loginForm}>
             <label style={S.label}>이름</label>
-            <input style={S.input} value={memberName} onChange={(e) => setMemberName(e.target.value)}
-              placeholder="이름을 입력하세요" onKeyDown={(e) => e.key === "Enter" && document.getElementById("member-pin")?.focus()}/>
+            <input style={S.input} value={memberName} onChange={(e) => setMemberName(e.target.value)} placeholder="이름을 입력하세요"
+              onKeyDown={(e) => e.key === "Enter" && document.getElementById("member-pin")?.focus()}/>
             <div style={{ height: 12 }}/>
             <label style={S.label}>비밀번호 (4자리)</label>
             <input id="member-pin" type="password" inputMode="numeric" maxLength={4} value={mPin} onChange={(e) => setMPin(e.target.value.replace(/\D/g, ""))}
@@ -174,19 +169,13 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
   const [editProgram, setEditProgram] = useState(null);
 
   if (screen === "memberForm" && editMember) return (
-    <MemberForm member={editMember} programs={programs} onSave={(m) => {
-      saveMember(m);
-      setEditMember(null); setScreen("members");
-    }} onCancel={() => { setEditMember(null); setScreen("members"); }}/>
+    <MemberForm member={editMember} programs={programs} onSave={(m) => { saveMember(m); setEditMember(null); setScreen("members"); }}
+      onCancel={() => { setEditMember(null); setScreen("members"); }}/>
   );
-
   if (screen === "programForm" && editProgram) return (
-    <ProgramForm program={editProgram} onSave={(p) => {
-      saveProgram(p);
-      setEditProgram(null); setScreen("programs");
-    }} onCancel={() => { setEditProgram(null); setScreen("programs"); }}/>
+    <ProgramForm program={editProgram} onSave={(p) => { saveProgram(p); setEditProgram(null); setScreen("programs"); }}
+      onCancel={() => { setEditProgram(null); setScreen("programs"); }}/>
   );
-
   if (screen === "members") return (
     <div style={S.container}>
       <BackBtn onClick={() => setScreen("home")}/>
@@ -215,27 +204,25 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
               </div>
             </div>
           );
-        })
-      }
+        })}
     </div>
   );
-
   if (screen === "programs") return (
     <div style={S.container}>
       <BackBtn onClick={() => setScreen("home")}/>
       <div style={S.pageHead}><h2 style={S.pageTitle}>프로그램 관리</h2>
         <button style={S.addBtn} onClick={() => {
           setEditProgram({ id: "p-" + Date.now(), level: "beginner", name: "", description: "", daysPerWeek: 3,
-            days: [{ dayName: "Day 1", exercises: [{ name: "", sets: 3, reps: "10", rest: "60초", note: "" }] }] });
+            days: [{ dayName: "Day 1", exercises: [{ name: "", sets: 3, reps: "10", weight: "", note: "" }] }] });
           setScreen("programForm");
         }}><I.Plus/> 추가</button></div>
       {programs.length === 0 ? <Empty icon="📋" text="프로그램이 없습니다" sub="프로그램을 만들어보세요"/> :
-        Object.entries(LEVELS).map(([key, { label }]) => {
+        Object.entries(LEVELS).map(([key]) => {
           const filtered = programs.filter((p) => p.level === key);
           if (!filtered.length) return null;
           return (
             <div key={key} style={{ marginBottom: 20 }}>
-              <div style={S.lvlHead}><span style={{ ...S.badge, background: LEVELS[key].bg, color: LEVELS[key].color }}>{label}</span><span style={{ color: "#555", fontSize: 12 }}>{filtered.length}개</span></div>
+              <div style={S.lvlHead}><span style={{ ...S.badge, background: LEVELS[key].bg, color: LEVELS[key].color }}>{LEVELS[key].label}</span><span style={{ color: "#555", fontSize: 12 }}>{filtered.length}개</span></div>
               {filtered.map((prog) => {
                 const assigned = members.filter((m) => m.programId === prog.id);
                 return (
@@ -258,22 +245,15 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
               })}
             </div>
           );
-        })
-      }
+        })}
     </div>
   );
-
-  // Admin Home
   return (
     <div style={S.container}>
       <Header title="관리자" subtitle="IF Admin" onLogout={onLogout}/>
       <div style={S.adminGrid}>
-        <button style={S.adminCard} onClick={() => setScreen("members")}>
-          <I.Users size={28} style={{ color: "#6a9fd8" }}/><div style={S.adminCardT}>회원 관리</div><div style={S.adminCardN}>{members.length}명</div>
-        </button>
-        <button style={S.adminCard} onClick={() => setScreen("programs")}>
-          <I.Clipboard size={28} style={{ color: "#22c55e" }}/><div style={S.adminCardT}>프로그램</div><div style={S.adminCardN}>{programs.length}개</div>
-        </button>
+        <button style={S.adminCard} onClick={() => setScreen("members")}><I.Users size={28} style={{ color: "#6a9fd8" }}/><div style={S.adminCardT}>회원 관리</div><div style={S.adminCardN}>{members.length}명</div></button>
+        <button style={S.adminCard} onClick={() => setScreen("programs")}><I.Clipboard size={28} style={{ color: "#22c55e" }}/><div style={S.adminCardT}>프로그램</div><div style={S.adminCardN}>{programs.length}개</div></button>
       </div>
     </div>
   );
@@ -307,15 +287,16 @@ function MemberForm({ member, programs, onSave, onCancel }) {
   );
 }
 
-// ─── Program Form ───
+// ─── Program Form (운동: 이름, 세트, 횟수, 중량 — 휴식 제거) ───
 function ProgramForm({ program, onSave, onCancel }) {
   const [p, setP] = useState(JSON.parse(JSON.stringify(program)));
   const u = (f, v) => setP((prev) => ({ ...prev, [f]: v }));
   const uDay = (di, f, v) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], [f]: v }; return { ...prev, days: d }; });
   const uEx = (di, ei, f, v) => setP((prev) => { const d = [...prev.days]; const e = [...d[di].exercises]; e[ei] = { ...e[ei], [f]: f === "sets" ? (parseInt(v)||0) : v }; d[di] = { ...d[di], exercises: e }; return { ...prev, days: d }; });
-  const addDay = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: [{ name: "", sets: 3, reps: "10", rest: "60초", note: "" }] }] }));
+  const addDay = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: [{ name: "", sets: 3, reps: "10", weight: "", note: "" }] }] }));
+  const copyDay1 = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: JSON.parse(JSON.stringify(prev.days[0].exercises)) }] }));
   const rmDay = (di) => setP((prev) => ({ ...prev, days: prev.days.filter((_, i) => i !== di) }));
-  const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", rest: "60초", note: "" }] }; return { ...prev, days: d }; });
+  const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", weight: "", note: "" }] }; return { ...prev, days: d }; });
   const rmEx = (di, ei) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: d[di].exercises.filter((_, i) => i !== ei) }; return { ...prev, days: d }; });
 
   return (
@@ -345,7 +326,7 @@ function ProgramForm({ program, onSave, onCancel }) {
               <div style={S.exEdRow}>
                 <div style={S.mini}><span style={S.miniL}>세트</span><input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(di, ei, "sets", e.target.value)}/></div>
                 <div style={S.mini}><span style={S.miniL}>횟수</span><input style={S.inputSm} value={ex.reps} onChange={(e) => uEx(di, ei, "reps", e.target.value)}/></div>
-                <div style={S.mini}><span style={S.miniL}>휴식</span><input style={S.inputSm} value={ex.rest} onChange={(e) => uEx(di, ei, "rest", e.target.value)}/></div>
+                <div style={S.mini}><span style={S.miniL}>중량(kg)</span><input style={S.inputSm} value={ex.weight || ""} onChange={(e) => uEx(di, ei, "weight", e.target.value)} placeholder="0"/></div>
               </div>
               <input style={S.inputSm} placeholder="참고사항 (선택)" value={ex.note} onChange={(e) => uEx(di, ei, "note", e.target.value)}/>
             </div>
@@ -355,17 +336,7 @@ function ProgramForm({ program, onSave, onCancel }) {
       ))}
       <div style={{ display: "flex", gap: 8 }}>
         <button style={{ ...S.addDayBtn, flex: 1 }} onClick={addDay}><I.Plus/> 빈 루틴 추가</button>
-        {p.days.length >= 1 && (
-          <button style={{ ...S.addDayBtn, flex: 1, background: "rgba(34,197,94,0.06)", borderColor: "rgba(34,197,94,0.2)", color: "#22c55e" }}
-            onClick={() => setP((prev) => ({
-              ...prev, days: [...prev.days, {
-                dayName: `Day ${prev.days.length + 1}`,
-                exercises: JSON.parse(JSON.stringify(prev.days[0].exercises))
-              }]
-            }))}>
-            Day 1 복사하여 추가
-          </button>
-        )}
+        {p.days.length >= 1 && <button style={{ ...S.addDayBtn, flex: 1, background: "rgba(34,197,94,0.06)", borderColor: "rgba(34,197,94,0.2)", color: "#22c55e" }} onClick={copyDay1}>Day 1 복사</button>}
       </div>
       <div style={S.formAct}>
         <button style={S.cancelBtn} onClick={onCancel}>취소</button>
@@ -391,11 +362,21 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
   );
   if (screen === "history") return <HistoryView logs={myLogs} onBack={() => setScreen("home")}/>;
+  if (screen === "stats") return <StatsView logs={myLogs} onBack={() => setScreen("home")}/>;
+
+  const today = new Date();
+  const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 
   return (
     <div style={S.container}>
       <Header title={session.memberName} subtitle="오늘도 한 세트 더" onLogout={onLogout}/>
-      <button style={S.histBtn} onClick={() => setScreen("history")}><I.Calendar/><span>내 운동 기록</span><span style={S.logCnt}>{myLogs.length}회</span></button>
+      <div style={S.todayDate}><I.Calendar size={14}/> {todayStr}</div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("history")}><I.Calendar/><span>기록</span><span style={S.logCnt}>{myLogs.length}</span></button>
+        <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("stats")}><I.Chart/><span>통계</span></button>
+      </div>
+
       {!program ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub="관리자에게 문의하세요"/> : (
         <div style={S.myProg}>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -407,8 +388,8 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
           <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
           <div style={S.dayGrid}>
             {program.days.map((day, i) => {
-              const today = new Date().toDateString();
-              const done = myLogs.some((l) => l.dayName === day.dayName && new Date(l.timestamp).toDateString() === today);
+              const todayDate = new Date().toDateString();
+              const done = myLogs.some((l) => l.dayName === day.dayName && new Date(l.timestamp).toDateString() === todayDate);
               return (
                 <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}) }} onClick={() => { setSelDay(i); setScreen("workout"); }}>
                   {done && <div style={S.doneChk}><I.Check size={14}/></div>}
@@ -426,27 +407,31 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 }
 
 // ═══════════════════════════════════════
-// WORKOUT SESSION
+// WORKOUT SESSION (시작/종료 시간 기록, 관리자 설정 중량 표시)
 // ═══════════════════════════════════════
 function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
   const day = program.days[dayIndex];
+  const [startTime] = useState(() => new Date().toISOString());
   const [exData, setExData] = useState(day.exercises.map((ex) => ({
-    name: ex.name, sets: Array.from({ length: ex.sets }, () => ({ weight: "", reps: "", done: false })),
-    targetReps: ex.reps, note: ex.note,
+    name: ex.name,
+    sets: Array.from({ length: ex.sets }, () => ({ weight: ex.weight || "", reps: ex.reps || "", done: false })),
+    targetReps: ex.reps, targetWeight: ex.weight || "", note: ex.note,
   })));
   const [activeEx, setActiveEx] = useState(0);
 
   const uSet = (ei, si, f, v) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets] }; n[ei].sets[si] = { ...n[ei].sets[si], [f]: v }; return n; });
   const toggleDone = (ei, si) => { uSet(ei, si, "done", !exData[ei].sets[si].done); };
-  const addSet = (ei) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets, { weight: "", reps: "", done: false }] }; return n; });
+  const addSet = (ei) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets, { weight: n[ei].targetWeight, reps: n[ei].targetReps, done: false }] }; return n; });
 
   const total = exData.reduce((a, e) => a + e.sets.length, 0);
   const done = exData.reduce((a, e) => a + e.sets.filter((s) => s.done).length, 0);
   const ex = exData[activeEx];
 
+  const todayStr = new Date(startTime).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
+
   return (
     <div style={S.container}>
-      <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 8 }}>
         <button style={S.backSm} onClick={onBack}><I.Back/></button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>{day.dayName}</div>
@@ -454,20 +439,28 @@ function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
           <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>{done}/{total} 세트 완료</div>
         </div>
       </div>
+      <div style={S.workoutMeta}>
+        <span><I.Calendar size={13}/> {todayStr}</span>
+        <span><I.Clock size={13}/> 시작 {fmtTime(startTime)}</span>
+      </div>
+
       <div style={S.exTabs}>{exData.map((e, i) => {
         const allDone = e.sets.every((s) => s.done);
         return <button key={i} style={{ ...S.exTab, ...(i === activeEx ? S.exTabOn : {}), ...(allDone ? S.exTabDone : {}) }} onClick={() => setActiveEx(i)}>{allDone ? "✓" : i + 1}</button>;
       })}</div>
       <div style={S.curEx}>
         <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}><span style={S.exNumDisplay}>{activeEx + 1}</span>{ex.name}</h3>
-        <div style={{ fontSize: 13, color: "#888", marginBottom: 8 }}>목표: {ex.targetReps}회</div>
+        <div style={{ display: "flex", gap: 12, fontSize: 13, color: "#888", marginBottom: 8 }}>
+          <span>목표: {ex.targetReps}회</span>
+          {ex.targetWeight && <span>중량: {ex.targetWeight}kg</span>}
+        </div>
         {ex.note && <div style={S.exNote}>{ex.note}</div>}
         <div style={{ marginTop: 12 }}>
           <div style={S.setHead}><span style={S.setHC}>세트</span><span style={S.setHCW}>무게(kg)</span><span style={S.setHCW}>횟수</span><span style={S.setHC}>완료</span></div>
           {ex.sets.map((s, si) => (
             <div key={si} style={{ ...S.setRow, ...(s.done ? S.setRowDone : {}) }}>
               <span style={S.setC}>{si + 1}</span>
-              <span style={S.setCW}><input type="number" inputMode="decimal" placeholder="0" value={s.weight} onChange={(e) => uSet(activeEx, si, "weight", e.target.value)} style={S.setIn}/></span>
+              <span style={S.setCW}><input type="number" inputMode="decimal" placeholder={ex.targetWeight || "0"} value={s.weight} onChange={(e) => uSet(activeEx, si, "weight", e.target.value)} style={S.setIn}/></span>
               <span style={S.setCW}><input type="number" inputMode="numeric" placeholder={ex.targetReps} value={s.reps} onChange={(e) => uSet(activeEx, si, "reps", e.target.value)} style={S.setIn}/></span>
               <span style={S.setC}><button style={{ ...S.doneBtn, ...(s.done ? S.doneBtnOn : {}) }} onClick={() => toggleDone(activeEx, si)}><I.Check/></button></span>
             </div>
@@ -481,7 +474,9 @@ function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
           <button style={{ ...S.navBtn, ...S.navBtnPri }} onClick={() => setActiveEx((v) => v + 1)}>다음 →</button>
         ) : (
           <button style={{ ...S.navBtn, ...S.finBtn }} onClick={() => {
+            const endTime = new Date().toISOString();
             onFinish({ memberId, programId: program.id, programName: program.name, dayName: day.dayName, level: program.level,
+              timestamp: startTime, startTime, endTime, date: new Date(startTime).toISOString().split("T")[0],
               exercises: exData.map((e) => ({ name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps })) })) });
           }}><I.Fire/> 운동 완료!</button>
         )}
@@ -491,11 +486,11 @@ function WorkoutSession({ program, dayIndex, memberId, onFinish, onBack }) {
 }
 
 // ═══════════════════════════════════════
-// HISTORY
+// HISTORY VIEW
 // ═══════════════════════════════════════
 function HistoryView({ logs, onBack }) {
   const [expId, setExpId] = useState(null);
-  const grouped = useMemo(() => { const g = {}; logs.forEach((l) => { const d = new Date(l.timestamp).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" }); if (!g[d]) g[d] = []; g[d].push(l); }); return g; }, [logs]);
+  const grouped = useMemo(() => { const g = {}; logs.forEach((l) => { const d = fmtDate(l.timestamp); if (!g[d]) g[d] = []; g[d].push(l); }); return g; }, [logs]);
   return (
     <div style={S.container}>
       <BackBtn onClick={onBack}/><h2 style={S.pageTitle}>내 운동 기록</h2>
@@ -506,10 +501,15 @@ function HistoryView({ logs, onBack }) {
             {entries.map((log) => (
               <div key={log.id}>
                 <button style={S.logCard} onClick={() => setExpId(expId === log.id ? null : log.id)}>
-                  <div><span style={{ ...S.badgeSm, background: LEVELS[log.level]?.bg, color: LEVELS[log.level]?.color }}>{LEVELS[log.level]?.label}</span>
+                  <div>
+                    <span style={{ ...S.badgeSm, background: LEVELS[log.level]?.bg, color: LEVELS[log.level]?.color }}>{LEVELS[log.level]?.label}</span>
                     <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{log.dayName}</div>
-                    <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{log.programName}</div></div>
-                  <div style={{ fontSize: 12, color: "#555", fontFamily: "'JetBrains Mono'" }}>{new Date(log.timestamp).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</div>
+                    <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{log.programName}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 12, color: "#555", fontFamily: "'JetBrains Mono'" }}>{fmtTime(log.startTime || log.timestamp)}</div>
+                    {log.startTime && log.endTime && <div style={{ fontSize: 11, color: "#6a9fd8", marginTop: 2 }}><I.Clock size={11}/> {fmtDuration(log.startTime, log.endTime)}</div>}
+                  </div>
                 </button>
                 {expId === log.id && <div style={S.logDet}>{log.exercises?.map((ex, i) => (
                   <div key={i} style={{ marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#ccc", marginBottom: 3 }}>{ex.name}</div>
@@ -518,18 +518,113 @@ function HistoryView({ logs, onBack }) {
               </div>
             ))}
           </div>
-        ))
-      }
+        ))}
     </div>
   );
 }
 
 // ═══════════════════════════════════════
-// SHARED
+// STATS VIEW (주별/월별/연간 그래프)
+// ═══════════════════════════════════════
+function StatsView({ logs, onBack }) {
+  const [mode, setMode] = useState("weekly"); // weekly | monthly | yearly
+
+  const stats = useMemo(() => {
+    if (!logs.length) return { weekly: [], monthly: [], yearly: [], totalSessions: 0, totalMinutes: 0, streak: 0 };
+
+    const weekMap = {}; const monthMap = {}; const yearMap = {};
+    let totalMin = 0;
+
+    logs.forEach((l) => {
+      const wk = getWeekKey(l.timestamp); weekMap[wk] = (weekMap[wk] || 0) + 1;
+      const mk = getMonthKey(l.timestamp); monthMap[mk] = (monthMap[mk] || 0) + 1;
+      const yk = new Date(l.timestamp).getFullYear().toString(); yearMap[yk] = (yearMap[yk] || 0) + 1;
+      if (l.startTime && l.endTime) totalMin += Math.floor((new Date(l.endTime) - new Date(l.startTime)) / 60000);
+    });
+
+    // streak
+    const dates = [...new Set(logs.map((l) => new Date(l.timestamp).toDateString()))].sort((a, b) => new Date(b) - new Date(a));
+    let streak = 0;
+    const today = new Date(); today.setHours(0,0,0,0);
+    for (let i = 0; i < dates.length; i++) {
+      const d = new Date(dates[i]); d.setHours(0,0,0,0);
+      const diff = Math.floor((today - d) / 86400000);
+      if (diff === i || diff === i + 1) streak++; else break;
+    }
+
+    const toArr = (map) => Object.entries(map).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
+    return { weekly: toArr(weekMap), monthly: toArr(monthMap), yearly: toArr(yearMap), totalSessions: logs.length, totalMinutes: totalMin, streak };
+  }, [logs]);
+
+  const chartData = mode === "weekly" ? stats.weekly : mode === "monthly" ? stats.monthly : stats.yearly;
+  const maxVal = Math.max(...chartData.map((d) => d[1]), 1);
+
+  const formatLabel = (key) => {
+    if (mode === "weekly") { const [, w] = key.split("-W"); return `${w}주`; }
+    if (mode === "monthly") { const [, m] = key.split("-"); return `${parseInt(m)}월`; }
+    return key;
+  };
+
+  return (
+    <div style={S.container}>
+      <BackBtn onClick={onBack}/><h2 style={S.pageTitle}>운동 통계</h2>
+
+      {/* Summary Cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 24 }}>
+        <div style={S.statCard}>
+          <div style={S.statNum}>{stats.totalSessions}</div>
+          <div style={S.statLabel}>총 운동</div>
+        </div>
+        <div style={S.statCard}>
+          <div style={{ ...S.statNum, color: "#22c55e" }}>{stats.streak}</div>
+          <div style={S.statLabel}>연속일</div>
+        </div>
+        <div style={S.statCard}>
+          <div style={{ ...S.statNum, color: "#f59e0b" }}>{stats.totalMinutes}</div>
+          <div style={S.statLabel}>총 시간(분)</div>
+        </div>
+      </div>
+
+      {/* Mode Tabs */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+        {[["weekly","주별"],["monthly","월별"],["yearly","연간"]].map(([k,l]) => (
+          <button key={k} style={{ ...S.modeTab, ...(mode === k ? S.modeTabOn : {}) }} onClick={() => setMode(k)}>{l}</button>
+        ))}
+      </div>
+
+      {/* Bar Chart */}
+      {chartData.length === 0 ? <Empty icon="📊" text="데이터가 없습니다"/> : (
+        <div style={S.chartWrap}>
+          <div style={S.chartBars}>
+            {chartData.map(([key, val], i) => (
+              <div key={key} style={S.chartCol}>
+                <div style={S.chartValLabel}>{val}</div>
+                <div style={S.chartBarOuter}>
+                  <div style={{
+                    ...S.chartBarInner,
+                    height: `${(val / maxVal) * 100}%`,
+                    background: mode === "weekly" ? "linear-gradient(180deg, #6a9fd8, #4a7ab5)" :
+                      mode === "monthly" ? "linear-gradient(180deg, #22c55e, #16a34a)" :
+                      "linear-gradient(180deg, #f59e0b, #d97706)",
+                    animationDelay: `${i * 60}ms`,
+                  }}/>
+                </div>
+                <div style={S.chartLabel}>{formatLabel(key)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// SHARED COMPONENTS
 // ═══════════════════════════════════════
 function Header({ title, subtitle, onLogout }) {
   return (
-    <header style={{ marginBottom: 24, paddingTop: 8 }}>
+    <header style={{ marginBottom: 16, paddingTop: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div><h1 style={{ fontSize: 20, fontWeight: 800, color: "#fff", display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
           <img src="/icon-192.png" alt="IF" style={{ width: 28, height: 28, borderRadius: 6 }}/>{title}</h1>
@@ -549,7 +644,7 @@ const S = {
   root: { fontFamily: "'Noto Sans KR', sans-serif", background: "#0a0a0a", color: "#e8e8e8", minHeight: "100vh", maxWidth: 480, margin: "0 auto", WebkitFontSmoothing: "antialiased" },
   loading: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0a0a0a" },
   spinner: { width: 32, height: 32, border: "3px solid #333", borderTopColor: "#6a9fd8", borderRadius: "50%", animation: "spin 0.8s linear infinite" },
-  loadingText: { color: "#a0a0a0", marginTop: 16, fontFamily: "'Noto Sans KR', sans-serif" },
+  loadingText: { color: "#a0a0a0", marginTop: 16 },
   container: { padding: "16px 16px 100px" },
 
   // Login
@@ -561,17 +656,8 @@ const S = {
   loginTab: { flex: 1, padding: "12px", borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: "pointer", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", color: "#888", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontFamily: "'Noto Sans KR', sans-serif" },
   loginTabOn: { background: "rgba(106,159,216,0.1)", borderColor: "rgba(106,159,216,0.3)", color: "#6a9fd8" },
   loginForm: { width: "100%" },
-  emptyLogin: { textAlign: "center", padding: "32px 0" },
-  memberList: { display: "flex", flexDirection: "column", gap: 6 },
-  memberSelBtn: { width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" },
-  avatar: { width: 40, height: 40, borderRadius: 10, background: "rgba(106,159,216,0.15)", color: "#6a9fd8", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, flexShrink: 0 },
-  avatarLg: { width: 44, height: 44, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, flexShrink: 0 },
-  backInline: { background: "none", border: "none", color: "#888", fontSize: 13, display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "4px 0", marginBottom: 12, fontFamily: "'Noto Sans KR', sans-serif" },
-  selCard: { display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", marginBottom: 16, background: "rgba(106,159,216,0.06)", border: "1px solid rgba(106,159,216,0.15)", borderRadius: 12, color: "#e8e8e8" },
   pinInput: { width: "100%", textAlign: "center", fontSize: 24, letterSpacing: "0.3em", padding: "14px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#fff", outline: "none", fontFamily: "'JetBrains Mono', monospace", boxSizing: "border-box" },
   errMsg: { marginTop: 12, padding: "10px 16px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 10, color: "#ef4444", fontSize: 13, textAlign: "center" },
-
-  // Header
   logoutBtn: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#888", padding: "8px 12px", borderRadius: 10, fontSize: 12, display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
 
   // Admin
@@ -589,6 +675,7 @@ const S = {
   // Cards
   mCard: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: 14, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" },
   mCardL: { display: "flex", gap: 12, alignItems: "center" },
+  avatarLg: { width: 44, height: 44, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, flexShrink: 0 },
   pCard: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: 14, marginBottom: 8, display: "flex", alignItems: "center", gap: 10 },
   lvlHead: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, justifyContent: "space-between" },
 
@@ -622,7 +709,8 @@ const S = {
   addDayBtn: { width: "100%", background: "rgba(106,159,216,0.06)", border: "1px dashed rgba(106,159,216,0.2)", borderRadius: 12, padding: 14, color: "#6a9fd8", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer", marginBottom: 16, fontFamily: "'Noto Sans KR', sans-serif" },
 
   // Member Home
-  histBtn: { width: "100%", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", gap: 10, color: "#e8e8e8", fontSize: 14, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", marginBottom: 20 },
+  todayDate: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6a9fd8", marginBottom: 16, padding: "8px 12px", background: "rgba(106,159,216,0.06)", borderRadius: 10, fontWeight: 500 },
+  histBtn: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", gap: 10, color: "#e8e8e8", fontSize: 14, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
   logCnt: { marginLeft: "auto", background: "rgba(106,159,216,0.15)", color: "#6a9fd8", padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600 },
   myProg: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: 16 },
   dayGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
@@ -632,6 +720,7 @@ const S = {
   dayNum: { fontSize: 10, fontWeight: 700, color: "#6a9fd8", letterSpacing: "0.12em", marginBottom: 6 },
 
   // Workout
+  workoutMeta: { display: "flex", gap: 16, fontSize: 12, color: "#888", marginBottom: 16, padding: "8px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 8, alignItems: "center" },
   exTabs: { display: "flex", gap: 6, marginBottom: 16, overflowX: "auto", paddingBottom: 4, WebkitOverflowScrolling: "touch" },
   exTab: { minWidth: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#888", flexShrink: 0, fontFamily: "'JetBrains Mono', monospace" },
   exTabOn: { background: "rgba(106,159,216,0.15)", borderColor: "#6a9fd8", color: "#6a9fd8" },
@@ -660,4 +749,18 @@ const S = {
   dateGrp: { fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid rgba(255,255,255,0.04)" },
   logCard: { width: "100%", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: "12px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" },
   logDet: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: 12, marginBottom: 8, marginTop: -2 },
+
+  // Stats
+  statCard: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "16px 8px", textAlign: "center" },
+  statNum: { fontSize: 28, fontWeight: 800, color: "#6a9fd8", fontFamily: "'JetBrains Mono'" },
+  statLabel: { fontSize: 11, color: "#888", marginTop: 4 },
+  modeTab: { flex: 1, padding: "10px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", color: "#888", fontFamily: "'Noto Sans KR', sans-serif" },
+  modeTabOn: { background: "rgba(106,159,216,0.1)", borderColor: "rgba(106,159,216,0.3)", color: "#6a9fd8" },
+  chartWrap: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: "20px 12px 12px" },
+  chartBars: { display: "flex", alignItems: "flex-end", gap: 6, height: 200 },
+  chartCol: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 },
+  chartValLabel: { fontSize: 11, fontWeight: 700, color: "#6a9fd8", fontFamily: "'JetBrains Mono'" },
+  chartBarOuter: { width: "100%", height: 160, background: "rgba(255,255,255,0.03)", borderRadius: 6, display: "flex", alignItems: "flex-end", overflow: "hidden" },
+  chartBarInner: { width: "100%", borderRadius: "6px 6px 0 0", transition: "height 0.6s ease-out", minHeight: 4 },
+  chartLabel: { fontSize: 10, color: "#666", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
 };
