@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue } from "firebase/database";
 
@@ -52,6 +52,7 @@ const I = {
   Clipboard: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>,
   Chart: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
   Clock: (p) => <svg width={p?.size||16} height={p?.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  Camera: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
 };
 
 const ADMIN_PIN = "0000";
@@ -519,6 +520,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   );
   if (screen === "history") return <HistoryView logs={myLogs} onBack={() => setScreen("home")}/>;
   if (screen === "stats") return <StatsView logs={myLogs} onBack={() => setScreen("home")}/>;
+  if (screen === "aiCounter") return <AIExerciseCounter onBack={() => setScreen("home")}/>;
 
   const today = new Date();
   const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
@@ -532,6 +534,11 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
         <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("history")}><I.Calendar/><span>기록</span><span style={S.logCnt}>{myLogs.length}</span></button>
         <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("stats")}><I.Chart/><span>통계</span></button>
       </div>
+      <button style={{ ...S.histBtn, width: "100%", marginBottom: 20, background: "linear-gradient(135deg, rgba(0,229,255,0.08), rgba(124,77,255,0.08))", border: "1px solid rgba(0,229,255,0.2)" }}
+        onClick={() => setScreen("aiCounter")}>
+        <I.Camera/><span style={{ fontWeight: 600 }}>AI 운동 카운터</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#00e5ff", background: "rgba(0,229,255,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
+      </button>
 
       {!program ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub="관리자에게 문의하세요"/> : (
         <div style={S.myProg}>
@@ -820,6 +827,310 @@ function Header({ title, subtitle, onLogout }) {
 }
 function BackBtn({ onClick, label }) { return <button style={S.backSm} onClick={onClick}><I.Back size={18}/> {label || "뒤로"}</button>; }
 function Empty({ icon, text, sub }) { return <div style={S.empty}><div style={{ fontSize: 48, marginBottom: 12 }}>{icon}</div><p style={{ color: "#888" }}>{text}</p>{sub && <p style={{ color: "#555", fontSize: 13, marginTop: 4 }}>{sub}</p>}</div>; }
+
+// ═══════════════════════════════════════
+// AI EXERCISE COUNTER (Pose Estimation)
+// ═══════════════════════════════════════
+const AI_KP = { NOSE:0, L_EYE:1, R_EYE:2, L_EAR:3, R_EAR:4, L_SHOULDER:5, R_SHOULDER:6, L_ELBOW:7, R_ELBOW:8, L_WRIST:9, R_WRIST:10, L_HIP:11, R_HIP:12, L_KNEE:13, R_KNEE:14, L_ANKLE:15, R_ANKLE:16 };
+const AI_SKELETON = [[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+const AI_EXERCISES = {
+  squat: { name: "스쿼트", emoji: "🦵", joints: [{ a:11,b:13,c:15,label:"L무릎" },{ a:12,b:14,c:16,label:"R무릎" }], pi:0, downTh:130, upTh:160, downMsg:"⬇️ 앉기", upMsg:"⬆️ 일어서기", rev:false },
+  pushup: { name: "푸시업", emoji: "💪", joints: [{ a:5,b:7,c:9,label:"L팔꿈치" },{ a:6,b:8,c:10,label:"R팔꿈치" }], pi:0, downTh:110, upTh:155, downMsg:"⬇️ 내려가기", upMsg:"⬆️ 올라오기", rev:false },
+  shoulderPress: { name: "숄더프레스", emoji: "🏋️", joints: [{ a:5,b:7,c:9,label:"L팔꿈치" },{ a:6,b:8,c:10,label:"R팔꿈치" }], pi:0, downTh:100, upTh:155, downMsg:"⬇️ 내리기", upMsg:"⬆️ 올리기", rev:false },
+  bicepCurl: { name: "바이셉 컬", emoji: "💪", joints: [{ a:5,b:7,c:9,label:"L팔꿈치" },{ a:6,b:8,c:10,label:"R팔꿈치" }], pi:0, downTh:60, upTh:140, downMsg:"⬆️ 올리기", upMsg:"⬇️ 내리기", rev:true },
+  lunge: { name: "런지", emoji: "🦿", joints: [{ a:11,b:13,c:15,label:"L무릎" },{ a:12,b:14,c:16,label:"R무릎" }], pi:0, downTh:120, upTh:160, downMsg:"⬇️ 내려가기", upMsg:"⬆️ 올라오기", rev:false },
+};
+
+function calcAngle(a, b, c) {
+  const r = Math.atan2(c.y-b.y,c.x-b.x) - Math.atan2(a.y-b.y,a.x-b.x);
+  let ang = Math.abs(r*180/Math.PI);
+  return ang > 180 ? 360-ang : ang;
+}
+
+function AIExerciseCounter({ onBack }) {
+  const videoRef = React.useRef(null);
+  const canvasRef = React.useRef(null);
+  const detectorRef = React.useRef(null);
+  const rafRef = React.useRef(null);
+  const smoothRef = React.useRef({});
+  const phaseRef = React.useRef("idle");
+
+  const [status, setStatus] = useState("init"); // init, loading, ready, tracking
+  const [exercise, setExercise] = useState("squat");
+  const [count, setCount] = useState(0);
+  const [phaseMsg, setPM] = useState("");
+  const [showFlash, setFlash] = useState(false);
+  const [debug, setDebug] = useState(false);
+  const [debugInfo, setDebugInfo] = useState("");
+  const [errMsg, setErrMsg] = useState("");
+
+  const countRef = React.useRef(0);
+  const trackingRef = React.useRef(false);
+
+  // Init camera + model
+  const init = React.useCallback(async () => {
+    setStatus("loading");
+    setErrMsg("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+      });
+      const vid = videoRef.current;
+      vid.srcObject = stream;
+      await vid.play();
+
+      await window.tf.setBackend("webgl");
+      await window.tf.ready();
+      detectorRef.current = await window.poseDetection.createDetector(
+        window.poseDetection.SupportedModels.MoveNet,
+        { modelType: window.poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+      );
+      setStatus("ready");
+    } catch (e) {
+      setErrMsg(e.message || "카메라/모델 로딩 실패");
+      setStatus("init");
+    }
+  }, []);
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      const vid = videoRef.current;
+      if (vid?.srcObject) vid.srcObject.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const resizeCanvas = React.useCallback(() => {
+    const c = canvasRef.current;
+    if (c) { c.width = c.offsetWidth; c.height = c.offsetHeight; }
+  }, []);
+
+  React.useEffect(() => { window.addEventListener("resize", resizeCanvas); return () => window.removeEventListener("resize", resizeCanvas); }, [resizeCanvas]);
+
+  // Detection loop
+  const detect = React.useCallback(async () => {
+    if (!trackingRef.current || !detectorRef.current || !videoRef.current) return;
+    try {
+      const poses = await detectorRef.current.estimatePoses(videoRef.current);
+      const c = canvasRef.current;
+      if (!c) return;
+      const ctx = c.getContext("2d");
+      const w = c.width, h = c.height;
+      const vid = videoRef.current;
+      const vw = vid.videoWidth, vh = vid.videoHeight;
+      const scale = Math.max(w/vw, h/vh);
+      const ox = (w - vw*scale)/2, oy = (h - vh*scale)/2;
+      const toC = (kp) => ({ x: w-(kp.x*scale+ox), y: kp.y*scale+oy });
+
+      ctx.clearRect(0,0,w,h);
+
+      if (poses.length > 0) {
+        const kps = poses[0].keypoints;
+        // Draw skeleton
+        ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,229,255,0.5)"; ctx.lineCap = "round";
+        for (const [i,j] of AI_SKELETON) {
+          if (kps[i].score > 0.3 && kps[j].score > 0.3) {
+            const a = toC(kps[i]), b = toC(kps[j]);
+            ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+          }
+        }
+        // Draw joints
+        for (const kp of kps) {
+          if (kp.score > 0.3) {
+            const p = toC(kp);
+            ctx.beginPath(); ctx.arc(p.x,p.y,5,0,Math.PI*2);
+            ctx.fillStyle = "rgba(0,229,255,0.9)"; ctx.fill();
+            ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = 2; ctx.stroke();
+          }
+        }
+        // Count reps
+        const ex = AI_EXERCISES[exercise];
+        const joint = ex.joints[ex.pi];
+        const kA = kps[joint.a], kB = kps[joint.b], kC = kps[joint.c];
+        if (kA.score > 0.3 && kB.score > 0.3 && kC.score > 0.3) {
+          const raw = calcAngle(kA, kB, kC);
+          const key = exercise + "_p";
+          if (smoothRef.current[key] === undefined) smoothRef.current[key] = raw;
+          smoothRef.current[key] = smoothRef.current[key]*0.6 + raw*0.4;
+          const angle = smoothRef.current[key];
+
+          // Debug info
+          if (debug) {
+            let dbg = `운동: ${ex.name}\n`;
+            ex.joints.forEach(j => {
+              if (kps[j.a].score>0.3 && kps[j.b].score>0.3 && kps[j.c].score>0.3)
+                dbg += `${j.label}: ${Math.round(calcAngle(kps[j.a],kps[j.b],kps[j.c]))}°\n`;
+            });
+            dbg += `Phase: ${phaseRef.current}\nDown < ${ex.downTh}° / Up > ${ex.upTh}°`;
+            setDebugInfo(dbg);
+          }
+
+          const phase = phaseRef.current;
+          if (ex.rev) {
+            // bicep curl: angle decreases when curling
+            if ((phase === "idle" || phase === "up") && angle < ex.downTh) {
+              phaseRef.current = "down"; setPM(ex.downMsg);
+            } else if (phase === "down" && angle > ex.upTh) {
+              phaseRef.current = "up";
+              countRef.current++; setCount(countRef.current);
+              setPM(ex.upMsg);
+              setFlash(true); setTimeout(() => setFlash(false), 200);
+              if (navigator.vibrate) navigator.vibrate(50);
+            }
+          } else {
+            if ((phase === "idle" || phase === "up") && angle < ex.downTh) {
+              phaseRef.current = "down"; setPM(ex.downMsg);
+            } else if (phase === "down" && angle > ex.upTh) {
+              phaseRef.current = "up";
+              countRef.current++; setCount(countRef.current);
+              setPM(ex.upMsg);
+              setFlash(true); setTimeout(() => setFlash(false), 200);
+              if (navigator.vibrate) navigator.vibrate(50);
+            }
+          }
+        }
+      }
+    } catch(e) { /* silent */ }
+    rafRef.current = requestAnimationFrame(detect);
+  }, [exercise, debug]);
+
+  const startTracking = React.useCallback(() => {
+    trackingRef.current = true;
+    setStatus("tracking");
+    resizeCanvas();
+    detect();
+  }, [detect, resizeCanvas]);
+
+  const stopTracking = React.useCallback(() => {
+    trackingRef.current = false;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setStatus("ready");
+    const c = canvasRef.current;
+    if (c) c.getContext("2d").clearRect(0,0,c.width,c.height);
+    setPM("");
+  }, []);
+
+  const resetCount = () => {
+    countRef.current = 0; setCount(0);
+    phaseRef.current = "idle"; smoothRef.current = {};
+  };
+
+  const changeExercise = (ex) => {
+    setExercise(ex); resetCount();
+  };
+
+  const CS = aiStyles;
+
+  return (
+    <div style={CS.wrap}>
+      {/* Header */}
+      <div style={CS.header}>
+        <button style={CS.backBtn} onClick={() => { stopTracking(); onBack(); }}>
+          <I.Back size={20}/> 뒤로
+        </button>
+        <div style={CS.statusBadge(status === "tracking")}>
+          {status === "init" ? "초기화 전" : status === "loading" ? "로딩 중..." : status === "tracking" ? "감지 중" : "대기 중"}
+        </div>
+      </div>
+
+      {/* Camera Area */}
+      <div style={CS.cameraArea}>
+        <video ref={videoRef} autoPlay playsInline muted style={CS.video}/>
+        <canvas ref={canvasRef} style={CS.canvas}/>
+
+        {/* Flash */}
+        {showFlash && <div style={CS.flash}/>}
+
+        {/* Count overlay */}
+        {status === "tracking" && (
+          <div style={CS.countOverlay}>
+            <div style={CS.countNum}>{count}</div>
+            <div style={CS.countLabel}>REPS</div>
+          </div>
+        )}
+
+        {/* Phase message */}
+        {phaseMsg && status === "tracking" && (
+          <div style={CS.phaseMsg}>{phaseMsg}</div>
+        )}
+
+        {/* Debug overlay */}
+        {debug && debugInfo && (
+          <div style={CS.debugBox}>{debugInfo}</div>
+        )}
+
+        {/* Init / Error overlay */}
+        {status === "init" && (
+          <div style={CS.overlay}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📸</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>AI 운동 카운터</div>
+            <div style={{ fontSize: 13, color: "#888", marginBottom: 20, lineHeight: 1.6, textAlign: "center" }}>
+              카메라로 운동 동작을 인식하고<br/>자동으로 횟수를 카운트합니다
+            </div>
+            {errMsg && <div style={{ fontSize: 12, color: "#ff4444", marginBottom: 12, background: "rgba(255,0,0,0.1)", padding: "8px 14px", borderRadius: 8 }}>{errMsg}</div>}
+            <button style={CS.initBtn} onClick={init}>카메라 시작</button>
+          </div>
+        )}
+
+        {status === "loading" && (
+          <div style={CS.overlay}>
+            <div style={CS.spinner}/>
+            <div style={{ color: "#888", marginTop: 16, fontSize: 14 }}>AI 모델 로딩 중...</div>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Controls */}
+      <div style={CS.bottomPanel}>
+        <div style={CS.exSelector}>
+          {Object.entries(AI_EXERCISES).map(([key, ex]) => (
+            <button key={key} style={CS.exBtn(exercise === key)} onClick={() => changeExercise(key)}>
+              {ex.emoji} {ex.name}
+            </button>
+          ))}
+        </div>
+        <div style={CS.controlsRow}>
+          <button style={CS.dbgBtn(debug)} onClick={() => setDebug(!debug)}>DBG</button>
+          {status === "ready" ? (
+            <button style={CS.mainBtn(false)} onClick={startTracking}>시작</button>
+          ) : status === "tracking" ? (
+            <button style={CS.mainBtn(true)} onClick={stopTracking}>정지</button>
+          ) : (
+            <button style={CS.mainBtn(false)} disabled>시작</button>
+          )}
+          <button style={CS.resetBtn} onClick={resetCount}>↺</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const aiStyles = {
+  wrap: { position: "fixed", inset: 0, background: "#0a0a0f", display: "flex", flexDirection: "column", zIndex: 1000, maxWidth: 480, margin: "0 auto" },
+  header: { padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, background: "linear-gradient(to bottom, rgba(10,10,15,0.9), transparent)" },
+  backBtn: { background: "none", border: "none", color: "#ccc", display: "flex", alignItems: "center", gap: 4, fontSize: 14, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", padding: "6px 0" },
+  statusBadge: (active) => ({ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, padding: "4px 10px", borderRadius: 20, background: active ? "rgba(0,230,118,0.1)" : "rgba(0,229,255,0.1)", color: active ? "#00e676" : "#00e5ff", border: `1px solid ${active ? "rgba(0,230,118,0.2)" : "rgba(0,229,255,0.2)"}` }),
+  cameraArea: { flex: 1, position: "relative", overflow: "hidden" },
+  video: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
+  canvas: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 2 },
+  flash: { position: "absolute", inset: 0, zIndex: 3, background: "radial-gradient(circle at center, rgba(0,229,255,0.2), transparent 70%)", pointerEvents: "none" },
+  countOverlay: { position: "absolute", top: 70, left: 0, right: 0, zIndex: 5, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" },
+  countNum: { fontFamily: "'JetBrains Mono', monospace", fontSize: 80, fontWeight: 700, color: "#fff", textShadow: "0 0 40px rgba(0,229,255,0.6), 0 4px 20px rgba(0,0,0,0.8)", lineHeight: 1 },
+  countLabel: { fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: 3, textShadow: "0 2px 8px rgba(0,0,0,0.8)" },
+  phaseMsg: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", zIndex: 5, pointerEvents: "none", fontSize: 16, fontWeight: 600, padding: "8px 18px", borderRadius: 24, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", color: "#00e5ff", whiteSpace: "nowrap" },
+  debugBox: { position: "absolute", bottom: 180, left: 12, zIndex: 5, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.7)", background: "rgba(0,0,0,0.5)", padding: "8px 12px", borderRadius: 8, backdropFilter: "blur(6px)", pointerEvents: "none", whiteSpace: "pre-line" },
+  overlay: { position: "absolute", inset: 0, zIndex: 50, background: "rgba(10,10,15,0.95)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 40 },
+  initBtn: { padding: "14px 40px", borderRadius: 14, border: "none", background: "linear-gradient(135deg, #00e5ff, #7c4dff)", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
+  spinner: { width: 40, height: 40, border: "3px solid #222", borderTopColor: "#00e5ff", borderRadius: "50%", animation: "spin 0.8s linear infinite" },
+  bottomPanel: { position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px 24px", background: "linear-gradient(to top, rgba(10,10,15,0.95) 60%, transparent)", paddingTop: 36 },
+  exSelector: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 12, WebkitOverflowScrolling: "touch", scrollbarWidth: "none" },
+  exBtn: (active) => ({ flexShrink: 0, padding: "8px 14px", borderRadius: 10, border: `1.5px solid ${active ? "#00e5ff" : "rgba(255,255,255,0.08)"}`, background: active ? "rgba(0,229,255,0.1)" : "rgba(255,255,255,0.03)", color: active ? "#00e5ff" : "#888", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", whiteSpace: "nowrap" }),
+  controlsRow: { display: "flex", gap: 10, alignItems: "center" },
+  mainBtn: (stop) => ({ flex: 1, padding: 14, borderRadius: 12, border: "none", fontSize: 15, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1, fontFamily: "'Noto Sans KR', sans-serif", color: "#fff", background: stop ? "linear-gradient(135deg, #ff1744, #d50000)" : "linear-gradient(135deg, #00e5ff, #7c4dff)", boxShadow: stop ? "0 4px 16px rgba(255,23,68,0.3)" : "0 4px 16px rgba(0,229,255,0.3)" }),
+  dbgBtn: (active) => ({ width: 48, height: 48, borderRadius: 12, border: `1.5px solid ${active ? "#00e5ff" : "rgba(255,255,255,0.08)"}`, background: active ? "rgba(0,229,255,0.05)" : "rgba(255,255,255,0.03)", color: active ? "#00e5ff" : "#888", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }),
+  resetBtn: { width: 48, height: 48, borderRadius: 12, border: "1.5px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "#888", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: "sans-serif" },
+};
 
 // ═══════════════════════════════════════
 // STYLES
