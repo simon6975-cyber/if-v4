@@ -71,8 +71,6 @@ function fmtDuration(start, end) {
   const m = Math.floor(diff / 60); const s = diff % 60;
   return m > 0 ? `${m}분 ${s}초` : `${s}초`;
 }
-function getWeekKey(d) { const dt = new Date(d); const jan1 = new Date(dt.getFullYear(), 0, 1); const days = Math.floor((dt - jan1) / 86400000); return `${dt.getFullYear()}-W${String(Math.ceil((days + jan1.getDay() + 1) / 7)).padStart(2, "0")}`; }
-function getMonthKey(d) { const dt = new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`; }
 
 // ═══════════════════════════════════════
 // MAIN APP
@@ -683,46 +681,47 @@ function HistoryView({ logs, onBack }) {
 }
 
 // ═══════════════════════════════════════
-// STATS VIEW (주별/월별/연간 그래프)
+// STATS VIEW (월별 달력 — 운동한 날 표시, 스크롤 누적)
 // ═══════════════════════════════════════
 function StatsView({ logs, onBack }) {
-  const [mode, setMode] = useState("weekly"); // weekly | monthly | yearly
-
   const stats = useMemo(() => {
-    if (!logs.length) return { weekly: [], monthly: [], yearly: [], totalSessions: 0, totalMinutes: 0, streak: 0 };
-
-    const weekMap = {}; const monthMap = {}; const yearMap = {};
     let totalMin = 0;
-
+    const workoutDates = new Set();
     logs.forEach((l) => {
-      const wk = getWeekKey(l.timestamp); weekMap[wk] = (weekMap[wk] || 0) + 1;
-      const mk = getMonthKey(l.timestamp); monthMap[mk] = (monthMap[mk] || 0) + 1;
-      const yk = new Date(l.timestamp).getFullYear().toString(); yearMap[yk] = (yearMap[yk] || 0) + 1;
+      workoutDates.add(new Date(l.timestamp).toISOString().split("T")[0]);
       if (l.startTime && l.endTime) totalMin += Math.floor((new Date(l.endTime) - new Date(l.startTime)) / 60000);
     });
-
     // streak
-    const dates = [...new Set(logs.map((l) => new Date(l.timestamp).toDateString()))].sort((a, b) => new Date(b) - new Date(a));
+    const sorted = [...workoutDates].sort().reverse();
     let streak = 0;
     const today = new Date(); today.setHours(0,0,0,0);
-    for (let i = 0; i < dates.length; i++) {
-      const d = new Date(dates[i]); d.setHours(0,0,0,0);
+    for (let i = 0; i < sorted.length; i++) {
+      const d = new Date(sorted[i]); d.setHours(0,0,0,0);
       const diff = Math.floor((today - d) / 86400000);
       if (diff === i || diff === i + 1) streak++; else break;
     }
-
-    const toArr = (map) => Object.entries(map).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
-    return { weekly: toArr(weekMap), monthly: toArr(monthMap), yearly: toArr(yearMap), totalSessions: logs.length, totalMinutes: totalMin, streak };
+    return { workoutDates, totalSessions: logs.length, totalMinutes: totalMin, streak };
   }, [logs]);
 
-  const chartData = mode === "weekly" ? stats.weekly : mode === "monthly" ? stats.monthly : stats.yearly;
-  const maxVal = Math.max(...chartData.map((d) => d[1]), 1);
+  // 월 목록 생성: 첫 운동 월 ~ 현재 월
+  const months = useMemo(() => {
+    const now = new Date();
+    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    let startMonth = currentMonth;
+    if (logs.length > 0) {
+      const earliest = new Date(Math.min(...logs.map((l) => new Date(l.timestamp).getTime())));
+      startMonth = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
+    }
+    const result = [];
+    const d = new Date(startMonth);
+    while (d <= currentMonth) {
+      result.push(new Date(d));
+      d.setMonth(d.getMonth() + 1);
+    }
+    return result.reverse(); // 최신 월이 위에
+  }, [logs]);
 
-  const formatLabel = (key) => {
-    if (mode === "weekly") { const [, w] = key.split("-W"); return `${w}주`; }
-    if (mode === "monthly") { const [, m] = key.split("-"); return `${parseInt(m)}월`; }
-    return key;
-  };
+  const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
   return (
     <div style={S.container}>
@@ -744,36 +743,62 @@ function StatsView({ logs, onBack }) {
         </div>
       </div>
 
-      {/* Mode Tabs */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-        {[["weekly","주별"],["monthly","월별"],["yearly","연간"]].map(([k,l]) => (
-          <button key={k} style={{ ...S.modeTab, ...(mode === k ? S.modeTabOn : {}) }} onClick={() => setMode(k)}>{l}</button>
-        ))}
-      </div>
+      {/* Monthly Calendars */}
+      {logs.length === 0 ? <Empty icon="📊" text="운동 기록이 없습니다"/> :
+        months.map((monthDate) => {
+          const year = monthDate.getFullYear();
+          const month = monthDate.getMonth();
+          const daysInMonth = new Date(year, month + 1, 0).getDate();
+          const firstDayOfWeek = new Date(year, month, 1).getDay();
+          const monthLabel = `${year}년 ${month + 1}월`;
 
-      {/* Bar Chart */}
-      {chartData.length === 0 ? <Empty icon="📊" text="데이터가 없습니다"/> : (
-        <div style={S.chartWrap}>
-          <div style={S.chartBars}>
-            {chartData.map(([key, val], i) => (
-              <div key={key} style={S.chartCol}>
-                <div style={S.chartValLabel}>{val}</div>
-                <div style={S.chartBarOuter}>
-                  <div style={{
-                    ...S.chartBarInner,
-                    height: `${(val / maxVal) * 100}%`,
-                    background: mode === "weekly" ? "linear-gradient(180deg, #6a9fd8, #4a7ab5)" :
-                      mode === "monthly" ? "linear-gradient(180deg, #22c55e, #16a34a)" :
-                      "linear-gradient(180deg, #f59e0b, #d97706)",
-                    animationDelay: `${i * 60}ms`,
-                  }}/>
-                </div>
-                <div style={S.chartLabel}>{formatLabel(key)}</div>
+          // 이번 달 운동 횟수
+          const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
+          const monthCount = logs.filter((l) => l.timestamp && l.timestamp.startsWith(monthKey)).length;
+
+          // 날짜 배열 (빈칸 포함)
+          const cells = [];
+          for (let i = 0; i < firstDayOfWeek; i++) cells.push(null);
+          for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+          const todayStr = new Date().toISOString().split("T")[0];
+
+          return (
+            <div key={monthKey} style={S.calMonth}>
+              <div style={S.calMonthHeader}>
+                <span style={S.calMonthTitle}>{monthLabel}</span>
+                <span style={S.calMonthCount}>{monthCount}회</span>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+              <div style={S.calWeekdays}>
+                {WEEKDAYS.map((w, i) => (
+                  <span key={w} style={{ ...S.calWeekday, color: i === 0 ? "#ef4444" : i === 6 ? "#6a9fd8" : "#555" }}>{w}</span>
+                ))}
+              </div>
+              <div style={S.calGrid}>
+                {cells.map((day, i) => {
+                  if (day === null) return <div key={`e${i}`} style={S.calCell}/>;
+                  const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                  const isWorkout = stats.workoutDates.has(dateStr);
+                  const isToday = dateStr === todayStr;
+                  const dayOfWeek = new Date(year, month, day).getDay();
+                  return (
+                    <div key={dateStr} style={S.calCell}>
+                      <div style={{
+                        ...S.calDay,
+                        ...(isWorkout ? S.calDayWorkout : {}),
+                        ...(isToday ? S.calDayToday : {}),
+                        color: isWorkout ? "#fff" : isToday ? "#6a9fd8" : dayOfWeek === 0 ? "rgba(239,68,68,0.6)" : dayOfWeek === 6 ? "rgba(106,159,216,0.6)" : "#888",
+                      }}>
+                        {day}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })
+      }
     </div>
   );
 }
@@ -929,13 +954,17 @@ const S = {
   statCard: { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "16px 8px", textAlign: "center" },
   statNum: { fontSize: 28, fontWeight: 800, color: "#6a9fd8", fontFamily: "'JetBrains Mono'" },
   statLabel: { fontSize: 11, color: "#888", marginTop: 4 },
-  modeTab: { flex: 1, padding: "10px", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", color: "#888", fontFamily: "'Noto Sans KR', sans-serif" },
-  modeTabOn: { background: "rgba(106,159,216,0.1)", borderColor: "rgba(106,159,216,0.3)", color: "#6a9fd8" },
-  chartWrap: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: "20px 12px 12px" },
-  chartBars: { display: "flex", alignItems: "flex-end", gap: 6, height: 200 },
-  chartCol: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 },
-  chartValLabel: { fontSize: 11, fontWeight: 700, color: "#6a9fd8", fontFamily: "'JetBrains Mono'" },
-  chartBarOuter: { width: "100%", height: 160, background: "rgba(255,255,255,0.03)", borderRadius: 6, display: "flex", alignItems: "flex-end", overflow: "hidden" },
-  chartBarInner: { width: "100%", borderRadius: "6px 6px 0 0", transition: "height 0.6s ease-out", minHeight: 4 },
-  chartLabel: { fontSize: 10, color: "#666", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
+
+  // Calendar
+  calMonth: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: 16, marginBottom: 16 },
+  calMonthHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  calMonthTitle: { fontSize: 16, fontWeight: 700, color: "#fff" },
+  calMonthCount: { fontSize: 13, fontWeight: 600, color: "#6a9fd8", background: "rgba(106,159,216,0.1)", padding: "3px 10px", borderRadius: 8 },
+  calWeekdays: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 6 },
+  calWeekday: { textAlign: "center", fontSize: 11, fontWeight: 600, padding: "4px 0" },
+  calGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 },
+  calCell: { aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center" },
+  calDay: { width: 32, height: 32, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 500, fontFamily: "'JetBrains Mono'", transition: "all 0.2s" },
+  calDayWorkout: { background: "linear-gradient(135deg, #4a7ab5, #6a9fd8)", color: "#fff", fontWeight: 700, boxShadow: "0 0 8px rgba(106,159,216,0.3)" },
+  calDayToday: { border: "2px solid #6a9fd8" },
 };
