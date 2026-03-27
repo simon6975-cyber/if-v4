@@ -314,12 +314,11 @@ function AdminMemberLogs({ member, logs, onBack }) {
   );
 }
 
-// ─── Member Form (회원별 운동 중량/횟수 커스텀 설정) ───
+// ─── Member Form (회원별 세트마다 중량/횟수 커스텀 설정) ───
 function MemberForm({ member, programs, onSave, onCancel }) {
   const [m, setM] = useState({ ...member, customExercises: member.customExercises || {} });
   const u = (f, v) => setM((p) => ({ ...p, [f]: v }));
 
-  // 프로그램 변경 시 customExercises 초기화
   const handleProgramChange = (progId) => {
     const prog = programs.find((p) => p.id === progId);
     const custom = {};
@@ -327,21 +326,53 @@ function MemberForm({ member, programs, onSave, onCancel }) {
       prog.days.forEach((day, di) => {
         day.exercises.forEach((ex, ei) => {
           const key = `${di}-${ei}`;
-          // 기존 값 유지 or 프로그램 기본값
-          custom[key] = m.customExercises?.[key] || { weight: "", reps: ex.reps };
+          const existing = m.customExercises?.[key];
+          if (existing?.sets) {
+            custom[key] = existing;
+          } else {
+            custom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: existing?.weight || "", reps: existing?.reps || ex.reps })) };
+          }
         });
       });
     }
     setM((p) => ({ ...p, programId: progId, customExercises: custom }));
   };
 
-  const updateCustom = (key, field, value) => {
-    setM((p) => ({
-      ...p, customExercises: { ...p.customExercises, [key]: { ...p.customExercises[key], [field]: value } }
-    }));
+  const updateSetVal = (key, si, field, value) => {
+    setM((p) => {
+      const ce = { ...p.customExercises };
+      const entry = { ...ce[key], sets: [...(ce[key]?.sets || [])] };
+      entry.sets[si] = { ...entry.sets[si], [field]: value };
+      ce[key] = entry;
+      return { ...p, customExercises: ce };
+    });
   };
 
   const selectedProg = programs.find((p) => p.id === m.programId);
+
+  // 프로그램 선택되어 있으나 customExercises가 없거나 구조가 다를 때 자동 초기화
+  const ensureCustom = () => {
+    if (!selectedProg) return m.customExercises;
+    const custom = { ...m.customExercises };
+    let changed = false;
+    selectedProg.days.forEach((day, di) => {
+      day.exercises.forEach((ex, ei) => {
+        const key = `${di}-${ei}`;
+        if (!custom[key]?.sets) {
+          custom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: custom[key]?.weight || "", reps: custom[key]?.reps || ex.reps })) };
+          changed = true;
+        } else if (custom[key].sets.length !== ex.sets) {
+          const existing = custom[key].sets;
+          custom[key] = { sets: Array.from({ length: ex.sets }, (_, i) => existing[i] || { weight: "", reps: ex.reps }) };
+          changed = true;
+        }
+      });
+    });
+    if (changed) setTimeout(() => setM((p) => ({ ...p, customExercises: custom })), 0);
+    return custom;
+  };
+
+  const customData = ensureCustom();
 
   return (
     <div style={S.container}>
@@ -360,7 +391,6 @@ function MemberForm({ member, programs, onSave, onCancel }) {
           {programs.map((p) => <option key={p.id} value={p.id}>[{LEVELS[p.level]?.label}] {p.name}</option>)}
         </select></div>
 
-      {/* 회원별 운동 중량/횟수 커스텀 설정 */}
       {selectedProg && (
         <>
           <div style={S.divider}/>
@@ -372,22 +402,34 @@ function MemberForm({ member, programs, onSave, onCancel }) {
               <div style={S.customDayTitle}>{day.dayName}</div>
               {day.exercises.map((ex, ei) => {
                 const key = `${di}-${ei}`;
-                const cv = m.customExercises?.[key] || { weight: "", reps: ex.reps };
+                const cv = customData?.[key];
+                const sets = cv?.sets || Array.from({ length: ex.sets }, () => ({ weight: "", reps: ex.reps }));
                 return (
-                  <div key={ei} style={S.customExRow}>
-                    <span style={S.customExNum}>{ei + 1}</span>
-                    <span style={S.customExName}>{ex.name || `운동 ${ei+1}`}</span>
-                    <div style={S.customInputGroup}>
-                      <div style={S.customField}>
-                        <span style={S.miniL}>중량</span>
-                        <input style={S.customInput} type="number" inputMode="decimal" placeholder="kg"
-                          value={cv.weight} onChange={(e) => updateCustom(key, "weight", e.target.value)}/>
+                  <div key={ei} style={S.customExBlock}>
+                    <div style={S.customExHeader}>
+                      <span style={S.customExNum}>{ei + 1}</span>
+                      <span style={S.customExName}>{ex.name || `운동 ${ei+1}`}</span>
+                      <span style={{ fontSize: 11, color: "#555" }}>{sets.length}세트</span>
+                    </div>
+                    <div style={S.customSetGrid}>
+                      <div style={S.customSetHeaderRow}>
+                        <span style={S.customSetHCell}>세트</span>
+                        <span style={S.customSetHCellW}>중량(kg)</span>
+                        <span style={S.customSetHCellW}>횟수</span>
                       </div>
-                      <div style={S.customField}>
-                        <span style={S.miniL}>횟수</span>
-                        <input style={S.customInput} inputMode="numeric" placeholder={ex.reps}
-                          value={cv.reps} onChange={(e) => updateCustom(key, "reps", e.target.value)}/>
-                      </div>
+                      {sets.map((s, si) => (
+                        <div key={si} style={S.customSetRow}>
+                          <span style={S.customSetCell}>{si + 1}</span>
+                          <span style={S.customSetCellW}>
+                            <input style={S.customSetInput} type="number" inputMode="decimal" placeholder="kg"
+                              value={s.weight || ""} onChange={(e) => updateSetVal(key, si, "weight", e.target.value)}/>
+                          </span>
+                          <span style={S.customSetCellW}>
+                            <input style={S.customSetInput} inputMode="numeric" placeholder={ex.reps}
+                              value={s.reps || ""} onChange={(e) => updateSetVal(key, si, "reps", e.target.value)}/>
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );
@@ -531,19 +573,20 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
   const [startTime] = useState(() => new Date().toISOString());
   const [exData, setExData] = useState(day.exercises.map((ex, ei) => {
     const custom = memberCustom?.[`${dayIndex}-${ei}`];
-    const w = custom?.weight || ex.weight || "";
-    const r = custom?.reps || ex.reps || "";
+    const customSets = custom?.sets;
     return {
       name: ex.name,
-      sets: Array.from({ length: ex.sets }, () => ({ weight: w, reps: r, done: false })),
-      targetReps: r, targetWeight: w, note: ex.note,
+      sets: Array.from({ length: ex.sets }, (_, si) => {
+        const cs = customSets?.[si];
+        return { weight: cs?.weight || "", reps: cs?.reps || ex.reps || "", done: false };
+      }),
+      targetReps: ex.reps, note: ex.note,
     };
   }));
   const [activeEx, setActiveEx] = useState(0);
 
   const uSet = (ei, si, f, v) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets] }; n[ei].sets[si] = { ...n[ei].sets[si], [f]: v }; return n; });
   const toggleDone = (ei, si) => { uSet(ei, si, "done", !exData[ei].sets[si].done); };
-  const addSet = (ei) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets, { weight: n[ei].targetWeight, reps: n[ei].targetReps, done: false }] }; return n; });
 
   const total = exData.reduce((a, e) => a + e.sets.length, 0);
   const done = exData.reduce((a, e) => a + e.sets.filter((s) => s.done).length, 0);
@@ -574,7 +617,6 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
         <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}><span style={S.exNumDisplay}>{activeEx + 1}</span>{ex.name}</h3>
         <div style={{ display: "flex", gap: 12, fontSize: 13, color: "#888", marginBottom: 8 }}>
           <span>목표: {ex.targetReps}회</span>
-          {ex.targetWeight && <span>중량: {ex.targetWeight}kg</span>}
         </div>
         {ex.note && <div style={S.exNote}>{ex.note}</div>}
         <div style={{ marginTop: 12 }}>
@@ -829,15 +871,21 @@ const S = {
   addExBtn: { width: "100%", background: "none", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 8, padding: 8, color: "#666", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
   addDayBtn: { width: "100%", background: "rgba(106,159,216,0.06)", border: "1px dashed rgba(106,159,216,0.2)", borderRadius: 12, padding: 14, color: "#6a9fd8", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer", marginBottom: 16, fontFamily: "'Noto Sans KR', sans-serif" },
 
-  // Member Custom Exercise Settings
+  // Member Custom Exercise Settings (per-set)
   customDayBlock: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: 12, marginBottom: 10 },
   customDayTitle: { fontSize: 13, fontWeight: 700, color: "#6a9fd8", marginBottom: 10, padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" },
-  customExRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" },
+  customExBlock: { marginBottom: 12 },
+  customExHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 },
   customExNum: { width: 22, height: 22, borderRadius: 6, background: "rgba(106,159,216,0.1)", color: "#6a9fd8", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0, fontFamily: "'JetBrains Mono'" },
-  customExName: { fontSize: 13, fontWeight: 500, color: "#ccc", flex: 1, minWidth: 80 },
-  customInputGroup: { display: "flex", gap: 6 },
-  customField: { display: "flex", flexDirection: "column", gap: 2 },
-  customInput: { width: 60, padding: "6px 8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#fff", fontSize: 13, textAlign: "center", fontFamily: "'JetBrains Mono'", outline: "none" },
+  customExName: { fontSize: 13, fontWeight: 600, color: "#ccc", flex: 1 },
+  customSetGrid: { paddingLeft: 30 },
+  customSetHeaderRow: { display: "flex", alignItems: "center", marginBottom: 4 },
+  customSetHCell: { width: 36, textAlign: "center", fontSize: 10, color: "#555", fontWeight: 600 },
+  customSetHCellW: { flex: 1, textAlign: "center", fontSize: 10, color: "#555", fontWeight: 600 },
+  customSetRow: { display: "flex", alignItems: "center", marginBottom: 3 },
+  customSetCell: { width: 36, textAlign: "center", fontSize: 12, color: "#888", fontFamily: "'JetBrains Mono'" },
+  customSetCellW: { flex: 1, display: "flex", justifyContent: "center" },
+  customSetInput: { width: "80%", padding: "6px 6px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#fff", fontSize: 13, textAlign: "center", fontFamily: "'JetBrains Mono'", outline: "none" },
 
   // Member Home
   todayDate: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6a9fd8", marginBottom: 16, padding: "8px 12px", background: "rgba(106,159,216,0.06)", borderRadius: 10, fontWeight: 500 },
