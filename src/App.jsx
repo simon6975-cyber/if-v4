@@ -485,7 +485,6 @@ function ProgramForm({ program, onSave, onCancel }) {
               <div style={S.exEdRow}><span style={S.exNum}>{ei + 1}</span><input style={{ ...S.inputSm, flex: 2 }} placeholder="운동 이름" value={ex.name} onChange={(e) => uEx(di, ei, "name", e.target.value)}/><button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} onClick={() => rmEx(di, ei)}><I.Trash/></button></div>
               <div style={S.exEdRow}>
                 <div style={S.mini}><span style={S.miniL}>세트</span><input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(di, ei, "sets", e.target.value)}/></div>
-                <div style={S.mini}><span style={S.miniL}>횟수</span><input style={S.inputSm} value={ex.reps} onChange={(e) => uEx(di, ei, "reps", e.target.value)}/></div>
               </div>
               <input style={S.inputSm} placeholder="참고사항 (선택)" value={ex.note} onChange={(e) => uEx(di, ei, "note", e.target.value)}/>
             </div>
@@ -615,9 +614,6 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
       })}</div>
       <div style={S.curEx}>
         <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}><span style={S.exNumDisplay}>{activeEx + 1}</span>{ex.name}</h3>
-        <div style={{ display: "flex", gap: 12, fontSize: 13, color: "#888", marginBottom: 8 }}>
-          <span>목표: {ex.targetReps}회</span>
-        </div>
         {ex.note && <div style={S.exNote}>{ex.note}</div>}
         <div style={{ marginTop: 12 }}>
           <div style={S.setHead}><span style={S.setHC}>세트</span><span style={S.setHCW}>무게(kg)</span><span style={S.setHCW}>횟수</span><span style={S.setHC}>완료</span></div>
