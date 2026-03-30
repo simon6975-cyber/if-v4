@@ -838,12 +838,14 @@ const AI_JOINT_MAP = {
   "l-hip":{a:5,b:11,c:13,label:"L엉덩이"},"r-hip":{a:6,b:12,c:14,label:"R엉덩이"},
   "l-elbow":{a:5,b:7,c:9,label:"L팔꿈치"},"r-elbow":{a:6,b:8,c:10,label:"R팔꿈치"},
   "l-shoulder":{a:11,b:5,c:7,label:"L어깨"},"r-shoulder":{a:12,b:6,c:8,label:"R어깨"},
+  "l-spine":{a:5,b:11,c:13,label:"L척추",isTorso:true},"r-spine":{a:6,b:12,c:14,label:"R척추",isTorso:true},
 };
 const AI_JOINT_OPTIONS = [
   {key:"l-knee",label:"L무릎"},{key:"r-knee",label:"R무릎"},
   {key:"l-hip",label:"L엉덩이"},{key:"r-hip",label:"R엉덩이"},
   {key:"l-elbow",label:"L팔꿈치"},{key:"r-elbow",label:"R팔꿈치"},
   {key:"l-shoulder",label:"L어깨"},{key:"r-shoulder",label:"R어깨"},
+  {key:"l-spine",label:"L척추(상체)"},{key:"r-spine",label:"R척추(상체)"},
 ];
 
 function calcAngle(a,b,c){const r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);let ang=Math.abs(r*180/Math.PI);return ang>180?360-ang:ang}
@@ -976,8 +978,26 @@ function AIExerciseCounter({ onBack }) {
           const lj=learned.joints[jk];
           color=(angle<lj.normalMin-tol||angle>lj.normalMax+tol)?"rgba(255,23,68,.9)":"rgba(0,230,118,.9)";
         }else if(curMode==="calibrating"){color="rgba(255,171,0,.9)";}
+
+        // For spine joints, draw the shoulder-hip-knee line thicker
+        if(j.isTorso){
+          const pA=toC(kps[j.a]),pB=toC(kps[j.b]),pC=toC(kps[j.c]);
+          ctx.save();
+          ctx.lineWidth=4;ctx.strokeStyle=color;ctx.setLineDash([]);
+          ctx.beginPath();ctx.moveTo(pA.x,pA.y);ctx.lineTo(pB.x,pB.y);ctx.lineTo(pC.x,pC.y);ctx.stroke();
+          // Draw vertical reference line from hip (dashed)
+          ctx.setLineDash([6,4]);ctx.lineWidth=1.5;ctx.strokeStyle="rgba(255,255,255,.3)";
+          ctx.beginPath();ctx.moveTo(pB.x,pB.y);ctx.lineTo(pB.x,pB.y-120);ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+          // Angle label near the midpoint of shoulder-hip
+          const mx=(pA.x+pB.x)/2, my=(pA.y+pB.y)/2;
+          ctx.font="600 13px 'JetBrains Mono',monospace";ctx.fillStyle=color;
+          ctx.fillText(`${Math.round(angle)}°`,mx+10,my);
+        }
+
         ctx.beginPath();ctx.arc(b.x,b.y,8,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();
-        ctx.font="600 12px 'JetBrains Mono',monospace";ctx.fillStyle="#fff";ctx.fillText(`${Math.round(angle)}°`,b.x+14,b.y-6);
+        if(!j.isTorso){ctx.font="600 12px 'JetBrains Mono',monospace";ctx.fillStyle="#fff";ctx.fillText(`${Math.round(angle)}°`,b.x+14,b.y-6);}
       }
     }
   }, []);
