@@ -536,8 +536,8 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
       </div>
       <button style={{ ...S.histBtn, width: "100%", marginBottom: 20, background: "linear-gradient(135deg, rgba(0,229,255,0.08), rgba(124,77,255,0.08))", border: "1px solid rgba(0,229,255,0.2)" }}
         onClick={() => setScreen("aiCounter")}>
-        <I.Camera/><span style={{ fontWeight: 600 }}>AI 운동 카운터</span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#00e5ff", background: "rgba(0,229,255,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
+        <I.Camera/><span style={{ fontWeight: 600 }}>AI 캘리브레이션</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#ffab00", background: "rgba(255,171,0,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
       </button>
 
       {!program ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub="관리자에게 문의하세요"/> : (
@@ -829,23 +829,26 @@ function BackBtn({ onClick, label }) { return <button style={S.backSm} onClick={
 function Empty({ icon, text, sub }) { return <div style={S.empty}><div style={{ fontSize: 48, marginBottom: 12 }}>{icon}</div><p style={{ color: "#888" }}>{text}</p>{sub && <p style={{ color: "#555", fontSize: 13, marginTop: 4 }}>{sub}</p>}</div>; }
 
 // ═══════════════════════════════════════
-// AI EXERCISE COUNTER (Pose Estimation)
+// AI EXERCISE COUNTER (Calibration + Form Check)
 // ═══════════════════════════════════════
-const AI_KP = { NOSE:0, L_EYE:1, R_EYE:2, L_EAR:3, R_EAR:4, L_SHOULDER:5, R_SHOULDER:6, L_ELBOW:7, R_ELBOW:8, L_WRIST:9, R_WRIST:10, L_HIP:11, R_HIP:12, L_KNEE:13, R_KNEE:14, L_ANKLE:15, R_ANKLE:16 };
+const AI_KP = { NOSE:0,L_EYE:1,R_EYE:2,L_EAR:3,R_EAR:4,L_SHOULDER:5,R_SHOULDER:6,L_ELBOW:7,R_ELBOW:8,L_WRIST:9,R_WRIST:10,L_HIP:11,R_HIP:12,L_KNEE:13,R_KNEE:14,L_ANKLE:15,R_ANKLE:16 };
 const AI_SKELETON = [[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
-const AI_EXERCISES = {
-  squat: { name: "스쿼트", emoji: "🦵", joints: [{ a:11,b:13,c:15,label:"L무릎" },{ a:12,b:14,c:16,label:"R무릎" }], pi:0, downTh:130, upTh:160, downMsg:"⬇️ 앉기", upMsg:"⬆️ 일어서기", rev:false },
-  pushup: { name: "푸시업", emoji: "💪", joints: [{ a:5,b:7,c:9,label:"L팔꿈치" },{ a:6,b:8,c:10,label:"R팔꿈치" }], pi:0, downTh:110, upTh:155, downMsg:"⬇️ 내려가기", upMsg:"⬆️ 올라오기", rev:false },
-  shoulderPress: { name: "숄더프레스", emoji: "🏋️", joints: [{ a:5,b:7,c:9,label:"L팔꿈치" },{ a:6,b:8,c:10,label:"R팔꿈치" }], pi:0, downTh:100, upTh:155, downMsg:"⬇️ 내리기", upMsg:"⬆️ 올리기", rev:false },
-  bicepCurl: { name: "바이셉 컬", emoji: "💪", joints: [{ a:5,b:7,c:9,label:"L팔꿈치" },{ a:6,b:8,c:10,label:"R팔꿈치" }], pi:0, downTh:60, upTh:140, downMsg:"⬆️ 올리기", upMsg:"⬇️ 내리기", rev:true },
-  lunge: { name: "런지", emoji: "🦿", joints: [{ a:11,b:13,c:15,label:"L무릎" },{ a:12,b:14,c:16,label:"R무릎" }], pi:0, downTh:120, upTh:160, downMsg:"⬇️ 내려가기", upMsg:"⬆️ 올라오기", rev:false },
+const AI_JOINT_MAP = {
+  "l-knee":{a:11,b:13,c:15,label:"L무릎"},"r-knee":{a:12,b:14,c:16,label:"R무릎"},
+  "l-hip":{a:5,b:11,c:13,label:"L엉덩이"},"r-hip":{a:6,b:12,c:14,label:"R엉덩이"},
+  "l-elbow":{a:5,b:7,c:9,label:"L팔꿈치"},"r-elbow":{a:6,b:8,c:10,label:"R팔꿈치"},
+  "l-shoulder":{a:11,b:5,c:7,label:"L어깨"},"r-shoulder":{a:12,b:6,c:8,label:"R어깨"},
 };
+const AI_JOINT_OPTIONS = [
+  {key:"l-knee",label:"L무릎"},{key:"r-knee",label:"R무릎"},
+  {key:"l-hip",label:"L엉덩이"},{key:"r-hip",label:"R엉덩이"},
+  {key:"l-elbow",label:"L팔꿈치"},{key:"r-elbow",label:"R팔꿈치"},
+  {key:"l-shoulder",label:"L어깨"},{key:"r-shoulder",label:"R어깨"},
+];
 
-function calcAngle(a, b, c) {
-  const r = Math.atan2(c.y-b.y,c.x-b.x) - Math.atan2(a.y-b.y,a.x-b.x);
-  let ang = Math.abs(r*180/Math.PI);
-  return ang > 180 ? 360-ang : ang;
-}
+function calcAngle(a,b,c){const r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);let ang=Math.abs(r*180/Math.PI);return ang>180?360-ang:ang}
+function arrAvg(a){return a.length?a.reduce((s,v)=>s+v,0)/a.length:0}
+function arrStd(a){const m=arrAvg(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length)}
 
 function AIExerciseCounter({ onBack }) {
   const videoRef = React.useRef(null);
@@ -853,253 +856,422 @@ function AIExerciseCounter({ onBack }) {
   const detectorRef = React.useRef(null);
   const rafRef = React.useRef(null);
   const smoothRef = React.useRef({});
-  const phaseRef = React.useRef("idle");
 
-  const [status, setStatus] = useState("init"); // init, loading, ready, tracking
-  const [exercise, setExercise] = useState("squat");
-  const [count, setCount] = useState(0);
-  const [phaseMsg, setPM] = useState("");
-  const [showFlash, setFlash] = useState(false);
+  const [status, setStatus] = useState("init"); // init, loading, ready
+  const [mode, setMode] = useState("idle"); // idle, calibrating, workout
   const [debug, setDebug] = useState(false);
   const [debugInfo, setDebugInfo] = useState("");
   const [errMsg, setErrMsg] = useState("");
 
-  const countRef = React.useRef(0);
-  const trackingRef = React.useRef(false);
+  // Exercise setup
+  const [exName, setExName] = useState("스쿼트");
+  const [selectedJoints, setSelectedJoints] = useState(["l-knee","r-knee"]);
+  const [tolerance, setTolerance] = useState(15);
+
+  // Calibration
+  const CALIB_REPS = 5;
+  const calibRef = React.useRef({ phase:"idle", count:0, data:{} });
+  const [calibCount, setCalibCount] = useState(0);
+  const [calibMsg, setCalibMsg] = useState("동작을 시작하세요...");
+  const [showCalibOverlay, setShowCalibOverlay] = useState(false);
+  const [showCalibProgress, setShowCalibProgress] = useState(false);
+
+  // Learned data
+  const learnedRef = React.useRef(null);
+  const [learnedDisplay, setLearnedDisplay] = useState(null);
+
+  // Workout
+  const workRef = React.useRef({ phase:"idle", count:0, warnings:0, frames:0 });
+  const [repCount, setRepCount] = useState(0);
+  const [formMsg, setFormMsg] = useState("");
+  const [formOk, setFormOk] = useState(true);
+  const [showFlash, setShowFlash] = useState("");
+
+  const modeRef = React.useRef("idle");
+  const selectedJointsRef = React.useRef(["l-knee","r-knee"]);
+  const toleranceRef = React.useRef(15);
+  const debugRef = React.useRef(false);
+
+  React.useEffect(() => { modeRef.current = mode; }, [mode]);
+  React.useEffect(() => { selectedJointsRef.current = selectedJoints; }, [selectedJoints]);
+  React.useEffect(() => { toleranceRef.current = tolerance; }, [tolerance]);
+  React.useEffect(() => { debugRef.current = debug; }, [debug]);
+
+  // EMA smoothing
+  const ema = React.useCallback((key, val, f=0.4) => {
+    const s = smoothRef.current;
+    if(s[key]===undefined) s[key]=val;
+    s[key]=s[key]*(1-f)+val*f;
+    return s[key];
+  }, []);
+
+  // Get angles for selected joints from keypoints
+  const getAngles = React.useCallback((kps) => {
+    const result = {};
+    for(const jk of selectedJointsRef.current){
+      const j = AI_JOINT_MAP[jk];
+      if(kps[j.a].score>.3 && kps[j.b].score>.3 && kps[j.c].score>.3){
+        result[jk] = ema("a_"+jk, calcAngle(kps[j.a], kps[j.b], kps[j.c]));
+      }
+    }
+    return result;
+  }, [ema]);
 
   // Init camera + model
   const init = React.useCallback(async () => {
-    setStatus("loading");
-    setErrMsg("");
+    setStatus("loading"); setErrMsg("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
-      });
-      const vid = videoRef.current;
-      vid.srcObject = stream;
-      await vid.play();
-
-      await window.tf.setBackend("webgl");
-      await window.tf.ready();
-      detectorRef.current = await window.poseDetection.createDetector(
-        window.poseDetection.SupportedModels.MoveNet,
-        { modelType: window.poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
-      );
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:false});
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      await window.tf.setBackend("webgl"); await window.tf.ready();
+      detectorRef.current = await window.poseDetection.createDetector(window.poseDetection.SupportedModels.MoveNet,{modelType:window.poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING});
       setStatus("ready");
-    } catch (e) {
-      setErrMsg(e.message || "카메라/모델 로딩 실패");
-      setStatus("init");
-    }
+    } catch(e) { setErrMsg(e.message||"카메라/모델 로딩 실패"); setStatus("init"); }
   }, []);
 
-  // Cleanup on unmount
+  // Cleanup
   React.useEffect(() => {
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      const vid = videoRef.current;
-      if (vid?.srcObject) vid.srcObject.getTracks().forEach(t => t.stop());
+      if(rafRef.current) cancelAnimationFrame(rafRef.current);
+      if(videoRef.current?.srcObject) videoRef.current.srcObject.getTracks().forEach(t=>t.stop());
     };
   }, []);
 
+  // Resize canvas
   const resizeCanvas = React.useCallback(() => {
-    const c = canvasRef.current;
-    if (c) { c.width = c.offsetWidth; c.height = c.offsetHeight; }
+    const c=canvasRef.current; if(c){c.width=c.offsetWidth;c.height=c.offsetHeight;}
+  }, []);
+  React.useEffect(() => { window.addEventListener("resize",resizeCanvas); return ()=>window.removeEventListener("resize",resizeCanvas); }, [resizeCanvas]);
+
+  // Drawing
+  const drawSkeleton = React.useCallback((kps) => {
+    const c=canvasRef.current; if(!c) return;
+    const ctx=c.getContext("2d");
+    const w=c.width,h=c.height,vid=videoRef.current;
+    const vw=vid.videoWidth,vh=vid.videoHeight;
+    const sc=Math.max(w/vw,h/vh),ox=(w-vw*sc)/2,oy=(h-vh*sc)/2;
+    const toC=kp=>({x:w-(kp.x*sc+ox),y:kp.y*sc+oy});
+    ctx.clearRect(0,0,w,h);
+
+    ctx.lineWidth=2.5;ctx.strokeStyle="rgba(0,229,255,.4)";ctx.lineCap="round";
+    for(const[i,j]of AI_SKELETON){
+      if(kps[i].score>.3&&kps[j].score>.3){const a=toC(kps[i]),b=toC(kps[j]);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+    }
+    for(const kp of kps){
+      if(kp.score>.3){const p=toC(kp);ctx.beginPath();ctx.arc(p.x,p.y,4,0,Math.PI*2);ctx.fillStyle="rgba(0,229,255,.85)";ctx.fill();ctx.strokeStyle="rgba(255,255,255,.7)";ctx.lineWidth=1.5;ctx.stroke();}
+    }
+
+    // Highlight tracked joints with color
+    const curMode = modeRef.current;
+    const learned = learnedRef.current;
+    const tol = toleranceRef.current;
+    for(const jk of selectedJointsRef.current){
+      const j=AI_JOINT_MAP[jk];
+      if(kps[j.a].score>.3&&kps[j.b].score>.3&&kps[j.c].score>.3){
+        const b=toC(kps[j.b]);
+        const angle=calcAngle(kps[j.a],kps[j.b],kps[j.c]);
+        let color="rgba(0,229,255,.9)";
+        if(curMode==="workout"&&learned?.joints[jk]){
+          const lj=learned.joints[jk];
+          color=(angle<lj.normalMin-tol||angle>lj.normalMax+tol)?"rgba(255,23,68,.9)":"rgba(0,230,118,.9)";
+        }else if(curMode==="calibrating"){color="rgba(255,171,0,.9)";}
+        ctx.beginPath();ctx.arc(b.x,b.y,8,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.stroke();
+        ctx.font="600 12px 'JetBrains Mono',monospace";ctx.fillStyle="#fff";ctx.fillText(`${Math.round(angle)}°`,b.x+14,b.y-6);
+      }
+    }
   }, []);
 
-  React.useEffect(() => { window.addEventListener("resize", resizeCanvas); return () => window.removeEventListener("resize", resizeCanvas); }, [resizeCanvas]);
+  // Process calibration frame
+  const processCalibration = React.useCallback((kps) => {
+    const angles = getAngles(kps);
+    if(Object.keys(angles).length===0) return;
+    const cal = calibRef.current;
 
-  // Detection loop
-  const detect = React.useCallback(async () => {
-    if (!trackingRef.current || !detectorRef.current || !videoRef.current) return;
-    try {
-      const poses = await detectorRef.current.estimatePoses(videoRef.current);
-      const c = canvasRef.current;
-      if (!c) return;
-      const ctx = c.getContext("2d");
-      const w = c.width, h = c.height;
-      const vid = videoRef.current;
-      const vw = vid.videoWidth, vh = vid.videoHeight;
-      const scale = Math.max(w/vw, h/vh);
-      const ox = (w - vw*scale)/2, oy = (h - vh*scale)/2;
-      const toC = (kp) => ({ x: w-(kp.x*scale+ox), y: kp.y*scale+oy });
+    for(const[jk,ang]of Object.entries(angles)){
+      if(!cal.data[jk]) cal.data[jk]={allFrames:[],repMins:[],repMaxs:[],curMin:999,curMax:0};
+      cal.data[jk].allFrames.push(ang);
+      if(ang<cal.data[jk].curMin) cal.data[jk].curMin=ang;
+      if(ang>cal.data[jk].curMax) cal.data[jk].curMax=ang;
+    }
 
-      ctx.clearRect(0,0,w,h);
+    const pj=selectedJointsRef.current[0];
+    const pAng=angles[pj]; if(pAng===undefined) return;
+    const cd=cal.data[pj];
+    const oMin=Math.min(...cd.allFrames),oMax=Math.max(...cd.allFrames);
+    const mid=(oMin+oMax)/2, dTh=mid-5, uTh=mid+5;
 
-      if (poses.length > 0) {
-        const kps = poses[0].keypoints;
-        // Draw skeleton
-        ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,229,255,0.5)"; ctx.lineCap = "round";
-        for (const [i,j] of AI_SKELETON) {
-          if (kps[i].score > 0.3 && kps[j].score > 0.3) {
-            const a = toC(kps[i]), b = toC(kps[j]);
-            ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    if(cal.phase==="idle"){
+      if(oMax-oMin>30){cal.phase="down";setCalibMsg("동작 감지됨...계속하세요");}
+      else{setCalibMsg("동작을 시작하세요...");}
+    }else{
+      if(pAng<dTh&&cal.phase!=="down"){cal.phase="down";setCalibMsg("⬇️ 수축 감지");}
+      else if(pAng>uTh&&cal.phase==="down"){
+        cal.phase="up"; cal.count++;
+        for(const jk of selectedJointsRef.current){
+          if(cal.data[jk]){
+            cal.data[jk].repMins.push(cal.data[jk].curMin);
+            cal.data[jk].repMaxs.push(cal.data[jk].curMax);
+            cal.data[jk].curMin=999;cal.data[jk].curMax=0;
           }
         }
-        // Draw joints
-        for (const kp of kps) {
-          if (kp.score > 0.3) {
-            const p = toC(kp);
-            ctx.beginPath(); ctx.arc(p.x,p.y,5,0,Math.PI*2);
-            ctx.fillStyle = "rgba(0,229,255,0.9)"; ctx.fill();
-            ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = 2; ctx.stroke();
-          }
-        }
-        // Count reps
-        const ex = AI_EXERCISES[exercise];
-        const joint = ex.joints[ex.pi];
-        const kA = kps[joint.a], kB = kps[joint.b], kC = kps[joint.c];
-        if (kA.score > 0.3 && kB.score > 0.3 && kC.score > 0.3) {
-          const raw = calcAngle(kA, kB, kC);
-          const key = exercise + "_p";
-          if (smoothRef.current[key] === undefined) smoothRef.current[key] = raw;
-          smoothRef.current[key] = smoothRef.current[key]*0.6 + raw*0.4;
-          const angle = smoothRef.current[key];
+        setCalibCount(cal.count);
+        setCalibMsg(`✅ ${cal.count}/${CALIB_REPS}회 완료`);
+        if(cal.count>=CALIB_REPS) finishCalibration();
+      }
+    }
+  }, [getAngles]);
 
-          // Debug info
-          if (debug) {
-            let dbg = `운동: ${ex.name}\n`;
-            ex.joints.forEach(j => {
-              if (kps[j.a].score>0.3 && kps[j.b].score>0.3 && kps[j.c].score>0.3)
-                dbg += `${j.label}: ${Math.round(calcAngle(kps[j.a],kps[j.b],kps[j.c]))}°\n`;
-            });
-            dbg += `Phase: ${phaseRef.current}\nDown < ${ex.downTh}° / Up > ${ex.upTh}°`;
-            setDebugInfo(dbg);
-          }
+  const finishCalibration = React.useCallback(() => {
+    setMode("idle"); modeRef.current="idle";
+    setShowCalibProgress(false);
+    const cal=calibRef.current;
+    const result={primaryJoint:selectedJointsRef.current[0],joints:{}};
+    for(const jk of selectedJointsRef.current){
+      const cd=cal.data[jk];
+      if(!cd||cd.repMins.length===0) continue;
+      const aMin=arrAvg(cd.repMins),aMax=arrAvg(cd.repMaxs);
+      const sMin=arrStd(cd.repMins),sMax=arrStd(cd.repMaxs);
+      result.joints[jk]={min:Math.round(aMin),max:Math.round(aMax),sdMin:Math.round(sMin*10)/10,sdMax:Math.round(sMax*10)/10,normalMin:Math.round(aMin-sMin*2),normalMax:Math.round(aMax+sMax*2)};
+    }
+    const pj=result.joints[result.primaryJoint];
+    if(pj){const rng=pj.max-pj.min;result.downThreshold=pj.min+rng*0.3;result.upThreshold=pj.max-rng*0.3;}
+    learnedRef.current=result;
+    setLearnedDisplay(result);
+  }, []);
 
-          const phase = phaseRef.current;
-          if (ex.rev) {
-            // bicep curl: angle decreases when curling
-            if ((phase === "idle" || phase === "up") && angle < ex.downTh) {
-              phaseRef.current = "down"; setPM(ex.downMsg);
-            } else if (phase === "down" && angle > ex.upTh) {
-              phaseRef.current = "up";
-              countRef.current++; setCount(countRef.current);
-              setPM(ex.upMsg);
-              setFlash(true); setTimeout(() => setFlash(false), 200);
-              if (navigator.vibrate) navigator.vibrate(50);
-            }
-          } else {
-            if ((phase === "idle" || phase === "up") && angle < ex.downTh) {
-              phaseRef.current = "down"; setPM(ex.downMsg);
-            } else if (phase === "down" && angle > ex.upTh) {
-              phaseRef.current = "up";
-              countRef.current++; setCount(countRef.current);
-              setPM(ex.upMsg);
-              setFlash(true); setTimeout(() => setFlash(false), 200);
-              if (navigator.vibrate) navigator.vibrate(50);
-            }
-          }
+  // Process workout frame
+  const processWorkout = React.useCallback((kps) => {
+    const angles=getAngles(kps);
+    const learned=learnedRef.current; if(!learned) return;
+    const pAng=angles[learned.primaryJoint]; if(pAng===undefined) return;
+    const w=workRef.current;
+    const tol=toleranceRef.current;
+    w.frames++;
+
+    let hasWarn=false, wMsg="";
+    for(const jk of selectedJointsRef.current){
+      const lj=learned.joints[jk]; if(!lj||angles[jk]===undefined) continue;
+      const ang=angles[jk];
+      if(ang<lj.normalMin-tol){hasWarn=true;wMsg=`⚠️ ${AI_JOINT_MAP[jk].label} 각도 너무 작음 (${Math.round(ang)}°)`;}
+      else if(ang>lj.normalMax+tol){hasWarn=true;wMsg=`⚠️ ${AI_JOINT_MAP[jk].label} 각도 너무 큼 (${Math.round(ang)}°)`;}
+    }
+
+    if(hasWarn){w.warnings++;setFormMsg(wMsg);setFormOk(false);setShowFlash("warn");setTimeout(()=>setShowFlash(""),180);}
+    else{setFormOk(true);}
+
+    if(w.phase==="idle"||w.phase==="up"){
+      if(pAng<learned.downThreshold) w.phase="down";
+    }else if(w.phase==="down"){
+      if(pAng>learned.upThreshold){
+        w.phase="up"; w.count++;
+        setRepCount(w.count);
+        if(!hasWarn){setFormMsg("✅ 좋은 자세!");setFormOk(true);setTimeout(()=>setFormMsg(""),800);}
+        setShowFlash("ok");setTimeout(()=>setShowFlash(""),180);
+        if(navigator.vibrate)navigator.vibrate(50);
+      }
+    }
+
+    if(debugRef.current){
+      let txt=`운동: ${exName}\n`;
+      for(const jk of selectedJointsRef.current){
+        const lj=learned.joints[jk];const ang=angles[jk];
+        if(ang!==undefined){
+          const ok=lj?(ang>=lj.normalMin-tol&&ang<=lj.normalMax+tol):true;
+          txt+=`${ok?"🟢":"🔴"} ${AI_JOINT_MAP[jk].label}: ${Math.round(ang)}°`;
+          if(lj) txt+=` (${lj.normalMin}°~${lj.normalMax}°)`;
+          txt+=`\n`;
         }
       }
-    } catch(e) { /* silent */ }
-    rafRef.current = requestAnimationFrame(detect);
-  }, [exercise, debug]);
+      txt+=`Phase: ${w.phase} | Reps: ${w.count}`;
+      if(w.frames>0) txt+=` | 정확도: ${Math.round((1-w.warnings/w.frames)*100)}%`;
+      setDebugInfo(txt);
+    }
+  }, [getAngles, exName]);
 
-  const startTracking = React.useCallback(() => {
-    trackingRef.current = true;
-    setStatus("tracking");
-    resizeCanvas();
-    detect();
-  }, [detect, resizeCanvas]);
+  // Main detection loop
+  const detect = React.useCallback(async () => {
+    if(!detectorRef.current||!videoRef.current) { rafRef.current=requestAnimationFrame(detect); return; }
+    try{
+      const poses=await detectorRef.current.estimatePoses(videoRef.current);
+      if(poses.length>0){
+        const kps=poses[0].keypoints;
+        drawSkeleton(kps);
+        const m=modeRef.current;
+        if(m==="calibrating") processCalibration(kps);
+        else if(m==="workout") processWorkout(kps);
+        else if(debugRef.current){
+          const angles=getAngles(kps);
+          let txt="[대기 모드]\n";
+          for(const jk of selectedJointsRef.current){if(angles[jk]!==undefined) txt+=`${AI_JOINT_MAP[jk].label}: ${Math.round(angles[jk])}°\n`;}
+          setDebugInfo(txt);
+        }
+      }
+    }catch(e){}
+    rafRef.current=requestAnimationFrame(detect);
+  }, [drawSkeleton, processCalibration, processWorkout, getAngles]);
 
-  const stopTracking = React.useCallback(() => {
-    trackingRef.current = false;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setStatus("ready");
-    const c = canvasRef.current;
-    if (c) c.getContext("2d").clearRect(0,0,c.width,c.height);
-    setPM("");
-  }, []);
+  // Start loop when ready
+  React.useEffect(() => {
+    if(status==="ready"){resizeCanvas();rafRef.current=requestAnimationFrame(detect);}
+    return ()=>{if(rafRef.current)cancelAnimationFrame(rafRef.current);};
+  }, [status, detect, resizeCanvas]);
 
-  const resetCount = () => {
-    countRef.current = 0; setCount(0);
-    phaseRef.current = "idle"; smoothRef.current = {};
+  const toggleJoint = (key) => {
+    setSelectedJoints(prev => {
+      if(prev.includes(key)){return prev.length<=1?prev:prev.filter(k=>k!==key);}
+      return [...prev, key];
+    });
   };
 
-  const changeExercise = (ex) => {
-    setExercise(ex); resetCount();
+  const startCalibration = () => {
+    setShowCalibOverlay(false); setShowCalibProgress(true);
+    calibRef.current={phase:"idle",count:0,data:{}};
+    smoothRef.current={};
+    setCalibCount(0); setCalibMsg("동작을 시작하세요...");
+    setMode("calibrating"); modeRef.current="calibrating";
   };
 
-  const CS = aiStyles;
+  const startWorkout = () => {
+    workRef.current={phase:"idle",count:0,warnings:0,frames:0};
+    smoothRef.current={};
+    setRepCount(0); setFormMsg(""); setFormOk(true);
+    setMode("workout"); modeRef.current="workout";
+  };
+
+  const stopWorkout = () => {
+    setMode("idle"); modeRef.current="idle"; setFormMsg("");
+    const w=workRef.current;
+    if(w.frames>0){
+      const acc=Math.round((1-w.warnings/w.frames)*100);
+      alert(`운동 완료!\n\n횟수: ${w.count}회\n자세 정확도: ${acc}%`);
+    }
+  };
+
+  const resetAll = () => {
+    setMode("idle"); modeRef.current="idle";
+    learnedRef.current=null; setLearnedDisplay(null);
+    setRepCount(0); setFormMsg(""); setShowCalibProgress(false); setShowCalibOverlay(false);
+    smoothRef.current={};
+  };
+
+  const A = aiStyles;
 
   return (
-    <div style={CS.wrap}>
-      {/* Header */}
-      <div style={CS.header}>
-        <button style={CS.backBtn} onClick={() => { stopTracking(); onBack(); }}>
+    <div style={A.wrap}>
+      {/* Top bar */}
+      <div style={A.topbar}>
+        <button style={A.backBtn} onClick={()=>{if(mode==="workout")stopWorkout();onBack();}}>
           <I.Back size={20}/> 뒤로
         </button>
-        <div style={CS.statusBadge(status === "tracking")}>
-          {status === "init" ? "초기화 전" : status === "loading" ? "로딩 중..." : status === "tracking" ? "감지 중" : "대기 중"}
-        </div>
+        <div style={A.pill(mode)}>{mode==="calibrating"?"캘리브레이션":mode==="workout"?"운동 중":"대기 중"}</div>
       </div>
 
-      {/* Camera Area */}
-      <div style={CS.cameraArea}>
-        <video ref={videoRef} autoPlay playsInline muted style={CS.video}/>
-        <canvas ref={canvasRef} style={CS.canvas}/>
+      {/* Camera */}
+      <div style={A.camWrap}>
+        <video ref={videoRef} autoPlay playsInline muted style={A.video}/>
+        <canvas ref={canvasRef} style={A.canvas}/>
 
         {/* Flash */}
-        {showFlash && <div style={CS.flash}/>}
+        {showFlash && <div style={A.flash(showFlash)}/>}
 
-        {/* Count overlay */}
-        {status === "tracking" && (
-          <div style={CS.countOverlay}>
-            <div style={CS.countNum}>{count}</div>
-            <div style={CS.countLabel}>REPS</div>
+        {/* Count HUD */}
+        {mode==="workout" && (
+          <div style={A.countHud}>
+            <div style={A.countVal}>{repCount}</div>
+            <div style={A.countLbl}>REPS</div>
           </div>
         )}
 
-        {/* Phase message */}
-        {phaseMsg && status === "tracking" && (
-          <div style={CS.phaseMsg}>{phaseMsg}</div>
+        {/* Form feedback banner */}
+        {formMsg && mode==="workout" && (
+          <div style={A.formBanner(formOk)}>{formMsg}</div>
         )}
 
-        {/* Debug overlay */}
-        {debug && debugInfo && (
-          <div style={CS.debugBox}>{debugInfo}</div>
+        {/* Calibration progress overlay */}
+        {showCalibProgress && (
+          <div style={A.calibProgress}>
+            <div style={A.calibRepNum}>{calibCount}</div>
+            <div style={A.calibRepLbl}>/ {CALIB_REPS} REPS</div>
+            <div style={A.calibStatus}>{calibMsg}</div>
+          </div>
         )}
 
-        {/* Init / Error overlay */}
-        {status === "init" && (
-          <div style={CS.overlay}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>📸</div>
-            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>AI 운동 카운터</div>
-            <div style={{ fontSize: 13, color: "#888", marginBottom: 20, lineHeight: 1.6, textAlign: "center" }}>
-              카메라로 운동 동작을 인식하고<br/>자동으로 횟수를 카운트합니다
+        {/* Calibration start overlay */}
+        {showCalibOverlay && (
+          <div style={A.overlay}>
+            <div style={{fontSize:56,marginBottom:16}}>🎯</div>
+            <div style={{fontSize:20,fontWeight:800,marginBottom:8}}>캘리브레이션 준비</div>
+            <div style={{fontSize:13,color:"#9499b0",lineHeight:1.7,textAlign:"center",marginBottom:24,maxWidth:300}}>
+              올바른 자세로 운동 동작을 <strong style={{color:"#ffab00"}}>{CALIB_REPS}회</strong> 시범 보여주세요.<br/>AI가 정확한 동작 범위를 학습합니다.
             </div>
-            {errMsg && <div style={{ fontSize: 12, color: "#ff4444", marginBottom: 12, background: "rgba(255,0,0,0.1)", padding: "8px 14px", borderRadius: 8 }}>{errMsg}</div>}
-            <button style={CS.initBtn} onClick={init}>카메라 시작</button>
+            <button style={A.calibBtn} onClick={startCalibration}>시범 시작</button>
+            <button style={{...A.calibBtn,...A.calibBtnSec}} onClick={()=>setShowCalibOverlay(false)}>취소</button>
           </div>
         )}
 
-        {status === "loading" && (
-          <div style={CS.overlay}>
-            <div style={CS.spinner}/>
-            <div style={{ color: "#888", marginTop: 16, fontSize: 14 }}>AI 모델 로딩 중...</div>
+        {/* Init screen */}
+        {status==="init" && (
+          <div style={A.overlay}>
+            <div style={{fontSize:56,marginBottom:16}}>🎯</div>
+            <div style={{fontSize:20,fontWeight:800,marginBottom:8}}>IF 캘리브레이션</div>
+            <div style={{fontSize:13,color:"#9499b0",lineHeight:1.7,textAlign:"center",marginBottom:20,maxWidth:300}}>고정된 카메라 위치에서<br/>운동 동작을 학습하고<br/>자세를 교정합니다</div>
+            {errMsg && <div style={{fontSize:12,color:"#ff4444",marginBottom:12,background:"rgba(255,0,0,.1)",padding:"8px 14px",borderRadius:8}}>{errMsg}</div>}
+            <button style={A.calibBtn} onClick={init}>카메라 시작</button>
           </div>
         )}
+        {status==="loading" && (
+          <div style={A.overlay}>
+            <div style={A.spinner}/>
+            <div style={{color:"#888",marginTop:16,fontSize:14}}>AI 모델 로딩 중...</div>
+          </div>
+        )}
+
+        {/* Debug panel */}
+        {debug && debugInfo && <div style={A.debugBox}>{debugInfo}</div>}
       </div>
 
-      {/* Bottom Controls */}
-      <div style={CS.bottomPanel}>
-        <div style={CS.exSelector}>
-          {Object.entries(AI_EXERCISES).map(([key, ex]) => (
-            <button key={key} style={CS.exBtn(exercise === key)} onClick={() => changeExercise(key)}>
-              {ex.emoji} {ex.name}
-            </button>
+      {/* Bottom panel */}
+      <div style={A.bottomPanel}>
+        {/* Exercise name */}
+        <div style={A.exNameRow}>
+          <input style={A.exNameInput} value={exName} onChange={e=>setExName(e.target.value)} placeholder="운동 이름 (예: 바벨 스쿼트)"/>
+        </div>
+
+        {/* Joint selector */}
+        <div style={A.jointRow}>
+          {AI_JOINT_OPTIONS.map(j=>(
+            <button key={j.key} style={A.jointBtn(selectedJoints.includes(j.key))} onClick={()=>toggleJoint(j.key)}>{j.label}</button>
           ))}
         </div>
-        <div style={CS.controlsRow}>
-          <button style={CS.dbgBtn(debug)} onClick={() => setDebug(!debug)}>DBG</button>
-          {status === "ready" ? (
-            <button style={CS.mainBtn(false)} onClick={startTracking}>시작</button>
-          ) : status === "tracking" ? (
-            <button style={CS.mainBtn(true)} onClick={stopTracking}>정지</button>
-          ) : (
-            <button style={CS.mainBtn(false)} disabled>시작</button>
-          )}
-          <button style={CS.resetBtn} onClick={resetCount}>↺</button>
+
+        {/* Tolerance slider */}
+        <div style={A.tolRow}>
+          <span style={A.tolLabel}>오차 허용:</span>
+          <input type="range" min="5" max="30" value={tolerance} onChange={e=>setTolerance(parseInt(e.target.value))} style={{flex:1,accentColor:"#ffab00"}}/>
+          <span style={A.tolVal}>±{tolerance}°</span>
+        </div>
+
+        {/* Learned data display */}
+        {learnedDisplay && (
+          <div style={A.calibDataBox}>
+            <div style={{color:"#ffab00",fontWeight:700,marginBottom:4}}>📊 캘리브레이션 결과</div>
+            <div>운동: <span style={{color:"#00e5ff"}}>{exName}</span></div>
+            <div>카운트: down &lt; <span style={{color:"#00e5ff"}}>{Math.round(learnedDisplay.downThreshold)}°</span> → up &gt; <span style={{color:"#00e5ff"}}>{Math.round(learnedDisplay.upThreshold)}°</span></div>
+            {Object.entries(learnedDisplay.joints).map(([jk,d])=>(
+              <div key={jk}>{AI_JOINT_MAP[jk].label}: <span style={{color:"#00e5ff"}}>{d.min}°~{d.max}°</span> (정상: {d.normalMin}°~{d.normalMax}°)</div>
+            ))}
+          </div>
+        )}
+
+        {/* Controls */}
+        <div style={A.ctrlRow}>
+          <button style={A.dbgBtn(debug)} onClick={()=>setDebug(!debug)}>DBG</button>
+          {mode==="idle" && !learnedDisplay && <button style={A.mainBtn("calib")} onClick={()=>setShowCalibOverlay(true)}>캘리브레이션</button>}
+          {mode==="idle" && learnedDisplay && <button style={A.mainBtn("start")} onClick={startWorkout}>운동 시작</button>}
+          {mode==="calibrating" && <button style={A.mainBtn("stop")} onClick={()=>{setMode("idle");modeRef.current="idle";setShowCalibProgress(false);}}>중지</button>}
+          {mode==="workout" && <button style={A.mainBtn("stop")} onClick={stopWorkout}>운동 종료</button>}
+          <button style={A.resetBtn} onClick={resetAll}>↺</button>
         </div>
       </div>
     </div>
@@ -1107,29 +1279,49 @@ function AIExerciseCounter({ onBack }) {
 }
 
 const aiStyles = {
-  wrap: { position: "fixed", inset: 0, background: "#0a0a0f", display: "flex", flexDirection: "column", zIndex: 1000, maxWidth: 480, margin: "0 auto" },
-  header: { padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, background: "linear-gradient(to bottom, rgba(10,10,15,0.9), transparent)" },
-  backBtn: { background: "none", border: "none", color: "#ccc", display: "flex", alignItems: "center", gap: 4, fontSize: 14, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", padding: "6px 0" },
-  statusBadge: (active) => ({ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, padding: "4px 10px", borderRadius: 20, background: active ? "rgba(0,230,118,0.1)" : "rgba(0,229,255,0.1)", color: active ? "#00e676" : "#00e5ff", border: `1px solid ${active ? "rgba(0,230,118,0.2)" : "rgba(0,229,255,0.2)"}` }),
-  cameraArea: { flex: 1, position: "relative", overflow: "hidden" },
-  video: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
-  canvas: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 2 },
-  flash: { position: "absolute", inset: 0, zIndex: 3, background: "radial-gradient(circle at center, rgba(0,229,255,0.2), transparent 70%)", pointerEvents: "none" },
-  countOverlay: { position: "absolute", top: 70, left: 0, right: 0, zIndex: 5, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" },
-  countNum: { fontFamily: "'JetBrains Mono', monospace", fontSize: 80, fontWeight: 700, color: "#fff", textShadow: "0 0 40px rgba(0,229,255,0.6), 0 4px 20px rgba(0,0,0,0.8)", lineHeight: 1 },
-  countLabel: { fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: 3, textShadow: "0 2px 8px rgba(0,0,0,0.8)" },
-  phaseMsg: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", zIndex: 5, pointerEvents: "none", fontSize: 16, fontWeight: 600, padding: "8px 18px", borderRadius: 24, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", color: "#00e5ff", whiteSpace: "nowrap" },
-  debugBox: { position: "absolute", bottom: 180, left: 12, zIndex: 5, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "rgba(255,255,255,0.7)", background: "rgba(0,0,0,0.5)", padding: "8px 12px", borderRadius: 8, backdropFilter: "blur(6px)", pointerEvents: "none", whiteSpace: "pre-line" },
-  overlay: { position: "absolute", inset: 0, zIndex: 50, background: "rgba(10,10,15,0.95)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 40 },
-  initBtn: { padding: "14px 40px", borderRadius: 14, border: "none", background: "linear-gradient(135deg, #00e5ff, #7c4dff)", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" },
-  spinner: { width: 40, height: 40, border: "3px solid #222", borderTopColor: "#00e5ff", borderRadius: "50%", animation: "spin 0.8s linear infinite" },
-  bottomPanel: { position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px 24px", background: "linear-gradient(to top, rgba(10,10,15,0.95) 60%, transparent)", paddingTop: 36 },
-  exSelector: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 12, WebkitOverflowScrolling: "touch", scrollbarWidth: "none" },
-  exBtn: (active) => ({ flexShrink: 0, padding: "8px 14px", borderRadius: 10, border: `1.5px solid ${active ? "#00e5ff" : "rgba(255,255,255,0.08)"}`, background: active ? "rgba(0,229,255,0.1)" : "rgba(255,255,255,0.03)", color: active ? "#00e5ff" : "#888", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", whiteSpace: "nowrap" }),
-  controlsRow: { display: "flex", gap: 10, alignItems: "center" },
-  mainBtn: (stop) => ({ flex: 1, padding: 14, borderRadius: 12, border: "none", fontSize: 15, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1, fontFamily: "'Noto Sans KR', sans-serif", color: "#fff", background: stop ? "linear-gradient(135deg, #ff1744, #d50000)" : "linear-gradient(135deg, #00e5ff, #7c4dff)", boxShadow: stop ? "0 4px 16px rgba(255,23,68,0.3)" : "0 4px 16px rgba(0,229,255,0.3)" }),
-  dbgBtn: (active) => ({ width: 48, height: 48, borderRadius: 12, border: `1.5px solid ${active ? "#00e5ff" : "rgba(255,255,255,0.08)"}`, background: active ? "rgba(0,229,255,0.05)" : "rgba(255,255,255,0.03)", color: active ? "#00e5ff" : "#888", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }),
-  resetBtn: { width: 48, height: 48, borderRadius: 12, border: "1.5px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "#888", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: "sans-serif" },
+  wrap:{position:"fixed",inset:0,background:"#08090d",display:"flex",flexDirection:"column",zIndex:1000,maxWidth:480,margin:"0 auto"},
+  topbar:{padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"absolute",top:0,left:0,right:0,zIndex:20,background:"linear-gradient(to bottom,rgba(8,9,13,.95),transparent)"},
+  backBtn:{background:"none",border:"none",color:"#ccc",display:"flex",alignItems:"center",gap:4,fontSize:14,cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",padding:"6px 0"},
+  pill:(mode)=>({fontFamily:"'JetBrains Mono',monospace",fontSize:11,padding:"4px 12px",borderRadius:20,letterSpacing:".04em",
+    background:mode==="calibrating"?"rgba(255,171,0,.12)":mode==="workout"?"rgba(0,230,118,.12)":"rgba(0,229,255,.08)",
+    color:mode==="calibrating"?"#ffab00":mode==="workout"?"#00e676":"#00e5ff",
+    border:`1px solid ${mode==="calibrating"?"rgba(255,171,0,.25)":mode==="workout"?"rgba(0,230,118,.25)":"rgba(0,229,255,.2)"}`
+  }),
+  camWrap:{flex:1,position:"relative",overflow:"hidden"},
+  video:{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)"},
+  canvas:{position:"absolute",top:0,left:0,width:"100%",height:"100%",zIndex:2},
+  flash:(type)=>({position:"absolute",inset:0,zIndex:3,pointerEvents:"none",background:type==="ok"?"radial-gradient(circle,rgba(0,229,255,.18),transparent 70%)":"radial-gradient(circle,rgba(255,23,68,.2),transparent 70%)"}),
+  countHud:{position:"absolute",top:65,left:0,right:0,zIndex:10,display:"flex",flexDirection:"column",alignItems:"center",pointerEvents:"none"},
+  countVal:{fontFamily:"'JetBrains Mono',monospace",fontSize:80,fontWeight:700,color:"#fff",textShadow:"0 0 50px rgba(0,229,255,.5),0 4px 20px rgba(0,0,0,.8)",lineHeight:1},
+  countLbl:{fontSize:13,fontWeight:600,color:"rgba(255,255,255,.5)",textTransform:"uppercase",letterSpacing:4},
+  formBanner:(ok)=>({position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",zIndex:10,pointerEvents:"none",padding:"10px 24px",borderRadius:30,fontSize:15,fontWeight:600,backdropFilter:"blur(10px)",whiteSpace:"nowrap",
+    background:ok?"rgba(0,230,118,.2)":"rgba(255,23,68,.2)",color:ok?"#00e676":"#ff1744",border:`1px solid ${ok?"rgba(0,230,118,.3)":"rgba(255,23,68,.3)"}`
+  }),
+  calibProgress:{position:"absolute",top:65,left:0,right:0,zIndex:35,display:"flex",flexDirection:"column",alignItems:"center",pointerEvents:"none"},
+  calibRepNum:{fontFamily:"'JetBrains Mono',monospace",fontSize:64,fontWeight:700,color:"#ffab00",textShadow:"0 0 40px rgba(255,171,0,.5)"},
+  calibRepLbl:{fontSize:13,color:"rgba(255,171,0,.7)",letterSpacing:3,fontWeight:600},
+  calibStatus:{marginTop:12,fontSize:13,color:"#9499b0",background:"rgba(0,0,0,.5)",padding:"6px 16px",borderRadius:20,backdropFilter:"blur(6px)"},
+  overlay:{position:"absolute",inset:0,zIndex:50,background:"rgba(8,9,13,.92)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:30},
+  calibBtn:{padding:"14px 36px",borderRadius:14,border:"none",fontFamily:"'Noto Sans KR',sans-serif",fontSize:16,fontWeight:700,cursor:"pointer",background:"linear-gradient(135deg,#ffab00,#ff8f00)",color:"#fff",boxShadow:"0 4px 20px rgba(255,171,0,.3)"},
+  calibBtnSec:{background:"#181a28",color:"#9499b0",border:"1px solid #222436",boxShadow:"none",marginTop:10},
+  spinner:{width:40,height:40,border:"3px solid #222",borderTopColor:"#00e5ff",borderRadius:"50%",animation:"spin .8s linear infinite"},
+  debugBox:{position:"absolute",bottom:280,left:12,zIndex:10,fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"rgba(255,255,255,.7)",background:"rgba(0,0,0,.55)",padding:"10px 14px",borderRadius:10,backdropFilter:"blur(6px)",pointerEvents:"none",whiteSpace:"pre-line",lineHeight:1.6},
+  bottomPanel:{position:"absolute",bottom:0,left:0,right:0,zIndex:20,padding:"0 14px 24px",background:"linear-gradient(to top,rgba(8,9,13,.96) 60%,transparent)",paddingTop:36},
+  exNameRow:{display:"flex",gap:8,marginBottom:8,alignItems:"center"},
+  exNameInput:{flex:1,padding:"8px 14px",borderRadius:10,border:"1.5px solid #222436",background:"#10111a",color:"#e8eaf0",fontFamily:"'Noto Sans KR',sans-serif",fontSize:14,fontWeight:500,outline:"none",boxSizing:"border-box"},
+  jointRow:{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none",WebkitOverflowScrolling:"touch"},
+  jointBtn:(on)=>({flexShrink:0,padding:"6px 12px",borderRadius:8,border:`1.5px solid ${on?"#00e5ff":"#222436"}`,background:on?"rgba(0,229,255,.06)":"#10111a",color:on?"#00e5ff":"#5c6080",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",whiteSpace:"nowrap"}),
+  tolRow:{display:"flex",alignItems:"center",gap:10,marginBottom:8},
+  tolLabel:{fontSize:12,color:"#5c6080",whiteSpace:"nowrap"},
+  tolVal:{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"#ffab00",minWidth:36,textAlign:"right"},
+  calibDataBox:{background:"#10111a",border:"1px solid #222436",borderRadius:10,padding:"10px 14px",marginBottom:10,fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#9499b0",lineHeight:1.8},
+  ctrlRow:{display:"flex",gap:10,alignItems:"center"},
+  mainBtn:(type)=>({flex:1,padding:14,borderRadius:12,border:"none",fontSize:15,fontWeight:700,cursor:"pointer",textTransform:"uppercase",letterSpacing:.5,fontFamily:"'Noto Sans KR',sans-serif",color:"#fff",
+    background:type==="calib"?"linear-gradient(135deg,#ffab00,#ff8f00)":type==="start"?"linear-gradient(135deg,#00e5ff,#7c4dff)":"linear-gradient(135deg,#ff1744,#d50000)",
+    boxShadow:type==="calib"?"0 4px 16px rgba(255,171,0,.25)":type==="start"?"0 4px 16px rgba(0,229,255,.25)":"0 4px 16px rgba(255,23,68,.25)"
+  }),
+  dbgBtn:(on)=>({width:48,height:48,borderRadius:12,border:`1.5px solid ${on?"#00e5ff":"#222436"}`,background:on?"rgba(0,229,255,.05)":"#10111a",color:on?"#00e5ff":"#5c6080",fontSize:11,fontFamily:"'JetBrains Mono',monospace",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}),
+  resetBtn:{width:48,height:48,borderRadius:12,border:"1.5px solid #222436",background:"#10111a",color:"#5c6080",fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0},
 };
 
 // ═══════════════════════════════════════
