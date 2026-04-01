@@ -56,6 +56,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
+const APP_VERSION = "v13.3";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -154,6 +155,7 @@ function LoginScreen({ members, onLogin }) {
           </div>
         )}
         {err && <div style={S.errMsg}>{err}</div>}
+        <div style={{ marginTop: 24, fontSize: 11, color: "#333", fontFamily: "'JetBrains Mono', monospace" }}>{APP_VERSION}</div>
       </div>
     </div>
   );
@@ -509,22 +511,27 @@ function ProgramForm({ program, onSave, onCancel }) {
 function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   const [screen, setScreen] = useState("home");
   const [selDay, setSelDay] = useState(null);
+  const [activeProgId, setActiveProgId] = useState(null); // null = use assigned program
+  const [showProgPicker, setShowProgPicker] = useState(false);
   const member = members.find((m) => m.id === session.memberId);
-  const program = programs.find((p) => p.id === member?.programId);
+  const assignedProgram = programs.find((p) => p.id === member?.programId);
+  const activeProgram = activeProgId ? programs.find((p) => p.id === activeProgId) : assignedProgram;
+  const isUsingOther = activeProgId && activeProgId !== member?.programId;
   const myLogs = useMemo(() => logs.filter((l) => l.memberId === session.memberId).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [logs, session.memberId]);
 
   // Check for in-progress workout sessions (must be before conditional returns)
-  const hasInProgress = useCallback((dayIdx) => {
-    if (!program) return false;
+  const hasInProgress = useCallback((prog, dayIdx) => {
+    if (!prog) return false;
     try {
-      const key = `if-workout-${session.memberId}-${program.id}-${dayIdx}`;
+      const key = `if-workout-${session.memberId}-${prog.id}-${dayIdx}`;
       const saved = JSON.parse(localStorage.getItem(key));
-      return saved?.exData && saved?.programId === program.id;
+      return saved?.exData && saved?.programId === prog.id;
     } catch { return false; }
-  }, [session.memberId, program]);
+  }, [session.memberId]);
 
-  if (screen === "workout" && program && selDay !== null) return (
-    <WorkoutSession program={program} dayIndex={selDay} memberId={session.memberId} memberCustom={member?.customExercises}
+  if (screen === "workout" && activeProgram && selDay !== null) return (
+    <WorkoutSession program={activeProgram} dayIndex={selDay} memberId={session.memberId}
+      memberCustom={!isUsingOther ? member?.customExercises : undefined}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
   );
@@ -534,6 +541,9 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 
   const today = new Date();
   const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
+
+  // Other available programs (excluding the assigned one)
+  const otherPrograms = programs.filter((p) => p.id !== member?.programId);
 
   return (
     <div style={S.container}>
@@ -550,20 +560,23 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
         <span style={{ marginLeft: "auto", fontSize: 11, color: "#ffab00", background: "rgba(255,171,0,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
       </button>
 
-      {!program ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub="관리자에게 문의하세요"/> : (
+      {/* Active Program Display */}
+      {!activeProgram ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub={otherPrograms.length > 0 ? "아래에서 다른 프로그램을 선택해보세요" : "관리자에게 문의하세요"}/> : (
         <div style={S.myProg}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <span style={{ ...S.badge, background: LEVELS[program.level]?.bg, color: LEVELS[program.level]?.color }}>{LEVELS[program.level]?.label}</span>
-            <span style={S.chip}>주 {program.daysPerWeek}일</span>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+            <span style={{ ...S.badge, background: LEVELS[activeProgram.level]?.bg, color: LEVELS[activeProgram.level]?.color }}>{LEVELS[activeProgram.level]?.label}</span>
+            <span style={S.chip}>주 {activeProgram.daysPerWeek}일</span>
+            {isUsingOther && <span style={{ fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.1)", padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>자유 선택</span>}
+            {isUsingOther && <button style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 11, color: "#6a9fd8", cursor: "pointer", padding: "2px 6px", fontFamily: "'Noto Sans KR', sans-serif", textDecoration: "underline" }} onClick={() => setActiveProgId(null)}>내 프로그램</button>}
           </div>
-          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{program.name}</h3>
-          <p style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>{program.description}</p>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{activeProgram.name}</h3>
+          <p style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>{activeProgram.description}</p>
           <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
           <div style={S.dayGrid}>
-            {program.days.map((day, i) => {
+            {activeProgram.days.map((day, i) => {
               const todayDate = new Date().toDateString();
-              const done = myLogs.some((l) => l.dayName === day.dayName && new Date(l.timestamp).toDateString() === todayDate);
-              const inProgress = hasInProgress(i);
+              const done = myLogs.some((l) => l.dayName === day.dayName && l.programId === activeProgram.id && new Date(l.timestamp).toDateString() === todayDate);
+              const inProgress = hasInProgress(activeProgram, i);
               return (
                 <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => { setSelDay(i); setScreen("workout"); }}>
                   {done && <div style={S.doneChk}><I.Check size={14}/></div>}
@@ -575,6 +588,38 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Other Programs Section */}
+      {otherPrograms.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <button style={{ width: "100%", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }} onClick={() => setShowProgPicker(!showProgPicker)}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <I.Clipboard/><span style={{ fontSize: 14, fontWeight: 600 }}>다른 프로그램</span>
+              <span style={{ fontSize: 12, color: "#555" }}>{otherPrograms.length}개</span>
+            </span>
+            <span style={{ color: "#555", fontSize: 16, transition: "transform 0.2s", transform: showProgPicker ? "rotate(180deg)" : "none" }}>▾</span>
+          </button>
+          {showProgPicker && (
+            <div style={{ marginTop: 8 }}>
+              {otherPrograms.map((p) => (
+                <button key={p.id} style={{ width: "100%", background: activeProgId === p.id ? "rgba(106,159,216,0.08)" : "rgba(255,255,255,0.02)", border: `1px solid ${activeProgId === p.id ? "rgba(106,159,216,0.25)" : "rgba(255,255,255,0.06)"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 6, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+                  onClick={() => { setActiveProgId(p.id); setShowProgPicker(false); }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
+                    {p.description && <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{p.description}</div>}
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <span style={{ ...S.badge, background: LEVELS[p.level]?.bg, color: LEVELS[p.level]?.color, fontSize: 10 }}>{LEVELS[p.level]?.label}</span>
+                      <span style={{ ...S.chip, fontSize: 10 }}>{p.days.length}개 루틴</span>
+                      <span style={{ ...S.chip, fontSize: 10 }}>주 {p.daysPerWeek}일</span>
+                    </div>
+                  </div>
+                  <span style={{ color: "#6a9fd8", fontSize: 13, flexShrink: 0 }}>선택 →</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
