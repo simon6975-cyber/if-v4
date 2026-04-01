@@ -525,6 +525,16 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   const today = new Date();
   const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 
+  // Check for in-progress workout sessions
+  const hasInProgress = useCallback((dayIdx) => {
+    if (!program) return false;
+    try {
+      const key = `if-workout-${session.memberId}-${program.id}-${dayIdx}`;
+      const saved = JSON.parse(localStorage.getItem(key));
+      return saved?.exData && saved?.programId === program.id;
+    } catch { return false; }
+  }, [session.memberId, program]);
+
   return (
     <div style={S.container}>
       <Header title={session.memberName} subtitle="오늘도 한 세트 더" onLogout={onLogout}/>
@@ -553,9 +563,11 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
             {program.days.map((day, i) => {
               const todayDate = new Date().toDateString();
               const done = myLogs.some((l) => l.dayName === day.dayName && new Date(l.timestamp).toDateString() === todayDate);
+              const inProgress = hasInProgress(i);
               return (
-                <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}) }} onClick={() => { setSelDay(i); setScreen("workout"); }}>
+                <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => { setSelDay(i); setScreen("workout"); }}>
                   {done && <div style={S.doneChk}><I.Check size={14}/></div>}
+                  {inProgress && !done && <div style={{ position: "absolute", top: 8, right: 8, fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.15)", padding: "2px 6px", borderRadius: 6, fontWeight: 700 }}>진행중</div>}
                   <div style={S.dayNum}>DAY {i + 1}</div>
                   <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{day.dayName}</div>
                   <div style={{ fontSize: 12, color: "#666" }}>{day.exercises.length}종목</div>
@@ -574,20 +586,54 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 // ═══════════════════════════════════════
 function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, onBack }) {
   const day = program.days[dayIndex];
-  const [startTime] = useState(() => new Date().toISOString());
-  const [exData, setExData] = useState(day.exercises.map((ex, ei) => {
-    const custom = memberCustom?.[`${dayIndex}-${ei}`];
-    const customSets = custom?.sets;
-    return {
-      name: ex.name,
-      sets: Array.from({ length: ex.sets }, (_, si) => {
-        const cs = customSets?.[si];
-        return { weight: cs?.weight || "", reps: cs?.reps || ex.reps || "", done: false };
-      }),
-      targetReps: ex.reps, note: ex.note,
-    };
-  }));
-  const [activeEx, setActiveEx] = useState(0);
+  const sessionKey = `if-workout-${memberId}-${program.id}-${dayIndex}`;
+
+  const [startTime] = useState(() => {
+    try { const saved = JSON.parse(localStorage.getItem(sessionKey)); if (saved?.startTime) return saved.startTime; } catch {}
+    return new Date().toISOString();
+  });
+
+  const [exData, setExData] = useState(() => {
+    // Try to restore from localStorage first
+    try {
+      const saved = JSON.parse(localStorage.getItem(sessionKey));
+      if (saved?.exData && saved?.programId === program.id && saved?.dayIndex === dayIndex) {
+        // Verify structure matches (same exercises/sets count)
+        const matches = saved.exData.length === day.exercises.length &&
+          saved.exData.every((e, i) => e.name === day.exercises[i].name);
+        if (matches) return saved.exData;
+      }
+    } catch {}
+    // Fresh init
+    return day.exercises.map((ex, ei) => {
+      const custom = memberCustom?.[`${dayIndex}-${ei}`];
+      const customSets = custom?.sets;
+      return {
+        name: ex.name,
+        sets: Array.from({ length: ex.sets }, (_, si) => {
+          const cs = customSets?.[si];
+          return { weight: cs?.weight || "", reps: cs?.reps || ex.reps || "", done: false };
+        }),
+        targetReps: ex.reps, note: ex.note,
+      };
+    });
+  });
+  const [activeEx, setActiveEx] = useState(() => {
+    try { const saved = JSON.parse(localStorage.getItem(sessionKey)); return saved?.activeEx || 0; } catch { return 0; }
+  });
+  const [restored, setRestored] = useState(() => {
+    try { const saved = JSON.parse(localStorage.getItem(sessionKey)); return saved?.exData ? true : false; } catch { return false; }
+  });
+
+  // Persist workout state to localStorage on every change
+  useEffect(() => {
+    try {
+      localStorage.setItem(sessionKey, JSON.stringify({ exData, activeEx, startTime, programId: program.id, dayIndex }));
+    } catch {}
+  }, [exData, activeEx, startTime, sessionKey, program.id, dayIndex]);
+
+  // Clear saved session on finish or intentional back
+  const clearSession = useCallback(() => { try { localStorage.removeItem(sessionKey); } catch {} }, [sessionKey]);
 
   const uSet = (ei, si, f, v) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets] }; n[ei].sets[si] = { ...n[ei].sets[si], [f]: v }; return n; });
   const toggleDone = (ei, si) => { uSet(ei, si, "done", !exData[ei].sets[si].done); };
@@ -598,10 +644,32 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
 
   const todayStr = new Date(startTime).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 
+  const handleBack = () => {
+    if (done > 0) {
+      if (!confirm("운동 기록이 임시 저장됩니다.\n나가시겠습니까?")) return;
+      // Don't clear session — allow resume
+    } else {
+      clearSession();
+    }
+    onBack();
+  };
+
+  const handleFinish = () => {
+    clearSession();
+    const endTime = new Date().toISOString();
+    onFinish({ memberId, programId: program.id, programName: program.name, dayName: day.dayName, level: program.level,
+      timestamp: startTime, startTime, endTime, date: new Date(startTime).toISOString().split("T")[0],
+      exercises: exData.map((e) => ({ name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps })) })) });
+  };
+
   return (
     <div style={S.container}>
+      {restored && <div style={{ background: "rgba(106,159,216,0.1)", border: "1px solid rgba(106,159,216,0.2)", borderRadius: 10, padding: "8px 14px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 12, color: "#6a9fd8" }}>💾 이전 운동 기록이 복원되었습니다</span>
+        <button style={{ background: "none", border: "none", color: "#888", fontSize: 11, cursor: "pointer", padding: "2px 6px" }} onClick={() => setRestored(false)}>✕</button>
+      </div>}
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 8 }}>
-        <button style={S.backSm} onClick={onBack}><I.Back/></button>
+        <button style={S.backSm} onClick={handleBack}><I.Back/></button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>{day.dayName}</div>
           <div style={S.progBar}><div style={{ ...S.progFill, width: `${total > 0 ? (done/total)*100 : 0}%` }}/></div>
@@ -637,12 +705,7 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
         {activeEx < exData.length - 1 ? (
           <button style={{ ...S.navBtn, ...S.navBtnPri }} onClick={() => setActiveEx((v) => v + 1)}>다음 →</button>
         ) : (
-          <button style={{ ...S.navBtn, ...S.finBtn }} onClick={() => {
-            const endTime = new Date().toISOString();
-            onFinish({ memberId, programId: program.id, programName: program.name, dayName: day.dayName, level: program.level,
-              timestamp: startTime, startTime, endTime, date: new Date(startTime).toISOString().split("T")[0],
-              exercises: exData.map((e) => ({ name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps })) })) });
-          }}><I.Fire/> 운동 완료!</button>
+          <button style={{ ...S.navBtn, ...S.finBtn }} onClick={handleFinish}><I.Fire/> 운동 완료!</button>
         )}
       </div>
     </div>
@@ -869,6 +932,55 @@ function AIExerciseCounter({ onBack }) {
   const [exName, setExName] = useState("스쿼트");
   const [selectedJoints, setSelectedJoints] = useState(["l-knee","r-knee"]);
   const [tolerance, setTolerance] = useState(15);
+
+  // Saved calibration profiles
+  const PROFILES_KEY = "if-calib-profiles";
+  const [savedProfiles, setSavedProfiles] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(PROFILES_KEY)) || []; } catch { return []; }
+  });
+  const [showProfileList, setShowProfileList] = useState(false);
+
+  const saveProfilesToStorage = React.useCallback((profiles) => {
+    setSavedProfiles(profiles);
+    try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch {}
+  }, []);
+
+  const saveCurrentProfile = React.useCallback(() => {
+    if (!learnedRef.current) return;
+    const name = exName.trim();
+    if (!name) { alert("운동 이름을 입력하세요"); return; }
+    const profile = {
+      id: Date.now().toString(),
+      name,
+      joints: selectedJointsRef.current.slice(),
+      tolerance: toleranceRef.current,
+      learned: JSON.parse(JSON.stringify(learnedRef.current)),
+      createdAt: new Date().toISOString(),
+    };
+    const existing = savedProfiles.filter(p => p.name !== name);
+    const updated = [profile, ...existing].slice(0, 20); // max 20 profiles
+    saveProfilesToStorage(updated);
+    alert(`"${name}" 캘리브레이션이 저장되었습니다`);
+  }, [exName, savedProfiles, saveProfilesToStorage]);
+
+  const loadProfile = React.useCallback((profile) => {
+    setExName(profile.name);
+    setSelectedJoints(profile.joints);
+    selectedJointsRef.current = profile.joints;
+    setTolerance(profile.tolerance);
+    toleranceRef.current = profile.tolerance;
+    learnedRef.current = profile.learned;
+    setLearnedDisplay(profile.learned);
+    smoothRef.current = {};
+    setShowProfileList(false);
+    setMode("idle"); modeRef.current = "idle";
+  }, []);
+
+  const deleteProfile = React.useCallback((id) => {
+    if (!confirm("이 프로필을 삭제하시겠습니까?")) return;
+    const updated = savedProfiles.filter(p => p.id !== id);
+    saveProfilesToStorage(updated);
+  }, [savedProfiles, saveProfilesToStorage]);
 
   // Calibration
   const CALIB_REPS = 5;
@@ -1253,46 +1365,84 @@ function AIExerciseCounter({ onBack }) {
 
       {/* Bottom panel */}
       <div style={A.bottomPanel}>
-        {/* Exercise name */}
-        <div style={A.exNameRow}>
-          <input style={A.exNameInput} value={exName} onChange={e=>setExName(e.target.value)} placeholder="운동 이름 (예: 바벨 스쿼트)"/>
-        </div>
+        {/* Saved profiles toggle */}
+        {!showProfileList ? (
+          <>
+            {/* Exercise name + saved profiles button */}
+            <div style={A.exNameRow}>
+              <input style={A.exNameInput} value={exName} onChange={e=>setExName(e.target.value)} placeholder="운동 이름 (예: 바벨 스쿼트)"/>
+              <button style={{...A.resetBtn,width:40,height:40,fontSize:13,position:"relative"}} onClick={()=>setShowProfileList(true)} title="저장된 동작">
+                📂
+                {savedProfiles.length>0 && <span style={{position:"absolute",top:-4,right:-4,background:"#ffab00",color:"#000",fontSize:9,fontWeight:800,width:16,height:16,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center"}}>{savedProfiles.length}</span>}
+              </button>
+            </div>
 
-        {/* Joint selector */}
-        <div style={A.jointRow}>
-          {AI_JOINT_OPTIONS.map(j=>(
-            <button key={j.key} style={A.jointBtn(selectedJoints.includes(j.key))} onClick={()=>toggleJoint(j.key)}>{j.label}</button>
-          ))}
-        </div>
+            {/* Joint selector */}
+            <div style={A.jointRow}>
+              {AI_JOINT_OPTIONS.map(j=>(
+                <button key={j.key} style={A.jointBtn(selectedJoints.includes(j.key))} onClick={()=>toggleJoint(j.key)}>{j.label}</button>
+              ))}
+            </div>
 
-        {/* Tolerance slider */}
-        <div style={A.tolRow}>
-          <span style={A.tolLabel}>오차 허용:</span>
-          <input type="range" min="5" max="30" value={tolerance} onChange={e=>setTolerance(parseInt(e.target.value))} style={{flex:1,accentColor:"#ffab00"}}/>
-          <span style={A.tolVal}>±{tolerance}°</span>
-        </div>
+            {/* Tolerance slider */}
+            <div style={A.tolRow}>
+              <span style={A.tolLabel}>오차 허용:</span>
+              <input type="range" min="5" max="30" value={tolerance} onChange={e=>setTolerance(parseInt(e.target.value))} style={{flex:1,accentColor:"#ffab00"}}/>
+              <span style={A.tolVal}>±{tolerance}°</span>
+            </div>
 
-        {/* Learned data display */}
-        {learnedDisplay && (
-          <div style={A.calibDataBox}>
-            <div style={{color:"#ffab00",fontWeight:700,marginBottom:4}}>📊 캘리브레이션 결과</div>
-            <div>운동: <span style={{color:"#00e5ff"}}>{exName}</span></div>
-            <div>카운트: down &lt; <span style={{color:"#00e5ff"}}>{Math.round(learnedDisplay.downThreshold)}°</span> → up &gt; <span style={{color:"#00e5ff"}}>{Math.round(learnedDisplay.upThreshold)}°</span></div>
-            {Object.entries(learnedDisplay.joints).map(([jk,d])=>(
-              <div key={jk}>{AI_JOINT_MAP[jk].label}: <span style={{color:"#00e5ff"}}>{d.min}°~{d.max}°</span> (정상: {d.normalMin}°~{d.normalMax}°)</div>
-            ))}
+            {/* Learned data display */}
+            {learnedDisplay && (
+              <div style={A.calibDataBox}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <span style={{color:"#ffab00",fontWeight:700}}>📊 캘리브레이션 결과</span>
+                  <button onClick={saveCurrentProfile} style={{background:"rgba(0,229,255,.1)",border:"1px solid rgba(0,229,255,.3)",borderRadius:6,padding:"3px 10px",color:"#00e5ff",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>💾 저장</button>
+                </div>
+                <div>운동: <span style={{color:"#00e5ff"}}>{exName}</span></div>
+                <div>카운트: down &lt; <span style={{color:"#00e5ff"}}>{Math.round(learnedDisplay.downThreshold)}°</span> → up &gt; <span style={{color:"#00e5ff"}}>{Math.round(learnedDisplay.upThreshold)}°</span></div>
+                {Object.entries(learnedDisplay.joints).map(([jk,d])=>(
+                  <div key={jk}>{AI_JOINT_MAP[jk].label}: <span style={{color:"#00e5ff"}}>{d.min}°~{d.max}°</span> (정상: {d.normalMin}°~{d.normalMax}°)</div>
+                ))}
+              </div>
+            )}
+
+            {/* Controls */}
+            <div style={A.ctrlRow}>
+              <button style={A.dbgBtn(debug)} onClick={()=>setDebug(!debug)}>DBG</button>
+              {mode==="idle" && !learnedDisplay && <button style={A.mainBtn("calib")} onClick={()=>setShowCalibOverlay(true)}>캘리브레이션</button>}
+              {mode==="idle" && learnedDisplay && <button style={A.mainBtn("start")} onClick={startWorkout}>운동 시작</button>}
+              {mode==="calibrating" && <button style={A.mainBtn("stop")} onClick={()=>{setMode("idle");modeRef.current="idle";setShowCalibProgress(false);}}>중지</button>}
+              {mode==="workout" && <button style={A.mainBtn("stop")} onClick={stopWorkout}>운동 종료</button>}
+              <button style={A.resetBtn} onClick={resetAll}>↺</button>
+            </div>
+          </>
+        ) : (
+          /* Saved profiles list */
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <span style={{color:"#fff",fontWeight:700,fontSize:15}}>📂 저장된 동작</span>
+              <button style={{background:"none",border:"none",color:"#888",fontSize:13,cursor:"pointer",padding:"4px 8px",fontFamily:"'Noto Sans KR',sans-serif"}} onClick={()=>setShowProfileList(false)}>✕ 닫기</button>
+            </div>
+            {savedProfiles.length===0 ? (
+              <div style={{textAlign:"center",padding:"20px 0",color:"#555",fontSize:13}}>저장된 동작이 없습니다.<br/>캘리브레이션 후 저장해보세요.</div>
+            ) : (
+              <div style={{maxHeight:240,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
+                {savedProfiles.map(p=>(
+                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:"#10111a",border:"1px solid #222436",borderRadius:10,marginBottom:6,cursor:"pointer"}} onClick={()=>loadProfile(p)}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:14,fontWeight:600,color:"#e8eaf0"}}>{p.name}</div>
+                      <div style={{fontSize:11,color:"#5c6080",marginTop:2}}>
+                        {p.joints.map(j=>AI_JOINT_MAP[j]?.label).join(", ")} · ±{p.tolerance}°
+                      </div>
+                      <div style={{fontSize:10,color:"#3a3d50",marginTop:1}}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</div>
+                    </div>
+                    <button onClick={(e)=>{e.stopPropagation();deleteProfile(p.id);}} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",padding:6,fontSize:14}}>🗑</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
-
-        {/* Controls */}
-        <div style={A.ctrlRow}>
-          <button style={A.dbgBtn(debug)} onClick={()=>setDebug(!debug)}>DBG</button>
-          {mode==="idle" && !learnedDisplay && <button style={A.mainBtn("calib")} onClick={()=>setShowCalibOverlay(true)}>캘리브레이션</button>}
-          {mode==="idle" && learnedDisplay && <button style={A.mainBtn("start")} onClick={startWorkout}>운동 시작</button>}
-          {mode==="calibrating" && <button style={A.mainBtn("stop")} onClick={()=>{setMode("idle");modeRef.current="idle";setShowCalibProgress(false);}}>중지</button>}
-          {mode==="workout" && <button style={A.mainBtn("stop")} onClick={stopWorkout}>운동 종료</button>}
-          <button style={A.resetBtn} onClick={resetAll}>↺</button>
-        </div>
       </div>
     </div>
   );
