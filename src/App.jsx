@@ -513,6 +513,16 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   const program = programs.find((p) => p.id === member?.programId);
   const myLogs = useMemo(() => logs.filter((l) => l.memberId === session.memberId).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [logs, session.memberId]);
 
+  // Check for in-progress workout sessions (must be before conditional returns)
+  const hasInProgress = useCallback((dayIdx) => {
+    if (!program) return false;
+    try {
+      const key = `if-workout-${session.memberId}-${program.id}-${dayIdx}`;
+      const saved = JSON.parse(localStorage.getItem(key));
+      return saved?.exData && saved?.programId === program.id;
+    } catch { return false; }
+  }, [session.memberId, program]);
+
   if (screen === "workout" && program && selDay !== null) return (
     <WorkoutSession program={program} dayIndex={selDay} memberId={session.memberId} memberCustom={member?.customExercises}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
@@ -524,16 +534,6 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 
   const today = new Date();
   const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
-
-  // Check for in-progress workout sessions
-  const hasInProgress = useCallback((dayIdx) => {
-    if (!program) return false;
-    try {
-      const key = `if-workout-${session.memberId}-${program.id}-${dayIdx}`;
-      const saved = JSON.parse(localStorage.getItem(key));
-      return saved?.exData && saved?.programId === program.id;
-    } catch { return false; }
-  }, [session.memberId, program]);
 
   return (
     <div style={S.container}>
