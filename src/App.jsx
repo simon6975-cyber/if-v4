@@ -799,15 +799,53 @@ function HistoryView({ logs, onBack }) {
 // STATS VIEW (월별 달력 — 운동한 날 표시, 스크롤 누적)
 // ═══════════════════════════════════════
 function StatsView({ logs, onBack }) {
+  const [filterMode, setFilterMode] = useState("all"); // all, month, year
+  const [selYear, setSelYear] = useState(() => new Date().getFullYear());
+  const [selMonth, setSelMonth] = useState(() => new Date().getMonth()); // 0-based
+
+  // Available years/months from logs
+  const availableYears = useMemo(() => {
+    const years = new Set();
+    years.add(new Date().getFullYear());
+    logs.forEach((l) => years.add(new Date(l.timestamp).getFullYear()));
+    return [...years].sort((a, b) => b - a);
+  }, [logs]);
+
+  const availableMonths = useMemo(() => {
+    // months in the selected year
+    const months = new Set();
+    const now = new Date();
+    if (selYear === now.getFullYear()) months.add(now.getMonth());
+    logs.forEach((l) => {
+      const d = new Date(l.timestamp);
+      if (d.getFullYear() === selYear) months.add(d.getMonth());
+    });
+    return [...months].sort((a, b) => b - a);
+  }, [logs, selYear]);
+
+  // Filter logs for stats cards
+  const filteredLogs = useMemo(() => {
+    if (filterMode === "all") return logs;
+    if (filterMode === "year") return logs.filter((l) => new Date(l.timestamp).getFullYear() === selYear);
+    if (filterMode === "month") return logs.filter((l) => {
+      const d = new Date(l.timestamp);
+      return d.getFullYear() === selYear && d.getMonth() === selMonth;
+    });
+    return logs;
+  }, [logs, filterMode, selYear, selMonth]);
+
+  // Compute stats from filtered logs
   const stats = useMemo(() => {
     let totalMin = 0;
     const workoutDates = new Set();
-    logs.forEach((l) => {
+    filteredLogs.forEach((l) => {
       workoutDates.add(new Date(l.timestamp).toISOString().split("T")[0]);
       if (l.startTime && l.endTime) totalMin += Math.floor((new Date(l.endTime) - new Date(l.startTime)) / 60000);
     });
-    // streak
-    const sorted = [...workoutDates].sort().reverse();
+    // streak (always computed from ALL logs)
+    const allDates = new Set();
+    logs.forEach((l) => allDates.add(new Date(l.timestamp).toISOString().split("T")[0]));
+    const sorted = [...allDates].sort().reverse();
     let streak = 0;
     const today = new Date(); today.setHours(0,0,0,0);
     for (let i = 0; i < sorted.length; i++) {
@@ -815,10 +853,10 @@ function StatsView({ logs, onBack }) {
       const diff = Math.floor((today - d) / 86400000);
       if (diff === i || diff === i + 1) streak++; else break;
     }
-    return { workoutDates, totalSessions: logs.length, totalMinutes: totalMin, streak };
-  }, [logs]);
+    return { workoutDates: allDates, totalSessions: filteredLogs.length, totalMinutes: totalMin, streak, filteredDates: workoutDates };
+  }, [filteredLogs, logs]);
 
-  // 월 목록 생성: 첫 운동 월 ~ 현재 월
+  // 월 목록 생성: 첫 운동 월 ~ 현재 월 (달력용, 전체 logs 기반)
   const months = useMemo(() => {
     const now = new Date();
     const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -833,14 +871,59 @@ function StatsView({ logs, onBack }) {
       result.push(new Date(d));
       d.setMonth(d.getMonth() + 1);
     }
-    return result.reverse(); // 최신 월이 위에
+    return result.reverse();
   }, [logs]);
 
   const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+  const MONTH_NAMES = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
+
+  const filterTabStyle = (active) => ({
+    padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+    border: `1px solid ${active ? "rgba(106,159,216,0.3)" : "rgba(255,255,255,0.08)"}`,
+    background: active ? "rgba(106,159,216,0.12)" : "rgba(255,255,255,0.03)",
+    color: active ? "#6a9fd8" : "#888",
+    fontFamily: "'Noto Sans KR', sans-serif",
+  });
+
+  const pickerStyle = {
+    padding: "5px 10px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+    border: "1px solid rgba(106,159,216,0.2)", background: "rgba(106,159,216,0.06)",
+    color: "#6a9fd8", fontFamily: "'JetBrains Mono', monospace", outline: "none",
+    cursor: "pointer", WebkitAppearance: "none", appearance: "none",
+  };
 
   return (
     <div style={S.container}>
       <BackBtn onClick={onBack}/><h2 style={S.pageTitle}>운동 통계</h2>
+
+      {/* Filter Tabs */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <button style={filterTabStyle(filterMode === "all")} onClick={() => setFilterMode("all")}>전체</button>
+        <button style={filterTabStyle(filterMode === "month")} onClick={() => { setFilterMode("month"); setSelYear(new Date().getFullYear()); setSelMonth(new Date().getMonth()); }}>월별</button>
+        <button style={filterTabStyle(filterMode === "year")} onClick={() => { setFilterMode("year"); setSelYear(new Date().getFullYear()); }}>연도별</button>
+
+        {/* Year picker */}
+        {(filterMode === "year" || filterMode === "month") && (
+          <select style={pickerStyle} value={selYear} onChange={(e) => { setSelYear(parseInt(e.target.value)); if (filterMode === "month") { const ms = []; logs.forEach(l => { const d = new Date(l.timestamp); if (d.getFullYear() === parseInt(e.target.value)) ms.push(d.getMonth()); }); setSelMonth(ms.length > 0 ? Math.max(...ms) : new Date().getMonth()); } }}>
+            {availableYears.map(y => <option key={y} value={y}>{y}년</option>)}
+          </select>
+        )}
+
+        {/* Month picker */}
+        {filterMode === "month" && (
+          <select style={pickerStyle} value={selMonth} onChange={(e) => setSelMonth(parseInt(e.target.value))}>
+            {availableMonths.length > 0 ? availableMonths.map(m => <option key={m} value={m}>{MONTH_NAMES[m]}</option>) :
+              Array.from({length:12},(_,i)=>i).reverse().map(m => <option key={m} value={m}>{MONTH_NAMES[m]}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* Filter label */}
+      <div style={{ fontSize: 11, color: "#555", marginBottom: 12, fontWeight: 500 }}>
+        {filterMode === "all" && "전체 기간 통계"}
+        {filterMode === "year" && `${selYear}년 통계`}
+        {filterMode === "month" && `${selYear}년 ${selMonth + 1}월 통계`}
+      </div>
 
       {/* Summary Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 24 }}>
@@ -867,11 +950,9 @@ function StatsView({ logs, onBack }) {
           const firstDayOfWeek = new Date(year, month, 1).getDay();
           const monthLabel = `${year}년 ${month + 1}월`;
 
-          // 이번 달 운동 횟수
           const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
           const monthCount = logs.filter((l) => l.timestamp && l.timestamp.startsWith(monthKey)).length;
 
-          // 날짜 배열 (빈칸 포함)
           const cells = [];
           for (let i = 0; i < firstDayOfWeek; i++) cells.push(null);
           for (let d = 1; d <= daysInMonth; d++) cells.push(d);
