@@ -63,7 +63,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.5";
+const APP_VERSION = "v13.6";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -324,35 +324,49 @@ function AdminMemberLogs({ member, logs, onBack }) {
 
 // ─── Member Form (회원별 세트마다 중량/횟수 커스텀 설정) ───
 function MemberForm({ member, programs, onSave, onCancel }) {
-  const [m, setM] = useState({ ...member, customExercises: member.customExercises || {} });
+  const [m, setM] = useState(() => {
+    // Migrate flat customExercises to per-program structure if needed
+    const raw = { ...member, customExercises: member.customExercises || {} };
+    if (raw.programId && raw.customExercises && !raw.customExercises[raw.programId]) {
+      // Check if it's old flat format (keys like "0-0" instead of program IDs)
+      const keys = Object.keys(raw.customExercises);
+      const isFlat = keys.length > 0 && keys.every((k) => /^\d+-\d+$/.test(k));
+      if (isFlat) {
+        raw.customExercises = { [raw.programId]: { ...raw.customExercises } };
+      }
+    }
+    return raw;
+  });
   const u = (f, v) => setM((p) => ({ ...p, [f]: v }));
 
   const handleProgramChange = (progId) => {
     const prog = programs.find((p) => p.id === progId);
-    const custom = {};
+    const allCustom = { ...m.customExercises };
+    // Build or reuse custom settings for the new program
+    const progCustom = { ...(allCustom[progId] || {}) };
     if (prog) {
       prog.days.forEach((day, di) => {
         day.exercises.forEach((ex, ei) => {
           const key = `${di}-${ei}`;
-          const existing = m.customExercises?.[key];
-          if (existing?.sets) {
-            custom[key] = existing;
-          } else {
-            custom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: existing?.weight || "", reps: existing?.reps || ex.reps })) };
+          if (!progCustom[key]?.sets) {
+            progCustom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: progCustom[key]?.weight || "", reps: progCustom[key]?.reps || ex.reps })) };
           }
         });
       });
     }
-    setM((p) => ({ ...p, programId: progId, customExercises: custom }));
+    if (progId) allCustom[progId] = progCustom;
+    setM((p) => ({ ...p, programId: progId, customExercises: allCustom }));
   };
 
   const updateSetVal = (key, si, field, value) => {
     setM((p) => {
-      const ce = { ...p.customExercises };
-      const entry = { ...ce[key], sets: [...(ce[key]?.sets || [])] };
+      const allCustom = { ...p.customExercises };
+      const progCustom = { ...(allCustom[p.programId] || {}) };
+      const entry = { ...progCustom[key], sets: [...(progCustom[key]?.sets || [])] };
       entry.sets[si] = { ...entry.sets[si], [field]: value };
-      ce[key] = entry;
-      return { ...p, customExercises: ce };
+      progCustom[key] = entry;
+      allCustom[p.programId] = progCustom;
+      return { ...p, customExercises: allCustom };
     });
   };
 
@@ -360,24 +374,28 @@ function MemberForm({ member, programs, onSave, onCancel }) {
 
   // 프로그램 선택되어 있으나 customExercises가 없거나 구조가 다를 때 자동 초기화
   const ensureCustom = () => {
-    if (!selectedProg) return m.customExercises;
-    const custom = { ...m.customExercises };
+    if (!selectedProg) return {};
+    const allCustom = { ...m.customExercises };
+    const progCustom = { ...(allCustom[m.programId] || {}) };
     let changed = false;
     selectedProg.days.forEach((day, di) => {
       day.exercises.forEach((ex, ei) => {
         const key = `${di}-${ei}`;
-        if (!custom[key]?.sets) {
-          custom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: custom[key]?.weight || "", reps: custom[key]?.reps || ex.reps })) };
+        if (!progCustom[key]?.sets) {
+          progCustom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: progCustom[key]?.weight || "", reps: progCustom[key]?.reps || ex.reps })) };
           changed = true;
-        } else if (custom[key].sets.length !== ex.sets) {
-          const existing = custom[key].sets;
-          custom[key] = { sets: Array.from({ length: ex.sets }, (_, i) => existing[i] || { weight: "", reps: ex.reps }) };
+        } else if (progCustom[key].sets.length !== ex.sets) {
+          const existing = progCustom[key].sets;
+          progCustom[key] = { sets: Array.from({ length: ex.sets }, (_, i) => existing[i] || { weight: "", reps: ex.reps }) };
           changed = true;
         }
       });
     });
-    if (changed) setTimeout(() => setM((p) => ({ ...p, customExercises: custom })), 0);
-    return custom;
+    if (changed) {
+      allCustom[m.programId] = progCustom;
+      setTimeout(() => setM((p) => ({ ...p, customExercises: allCustom })), 0);
+    }
+    return progCustom;
   };
 
   const customData = ensureCustom();
@@ -583,7 +601,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 
   if (screen === "workout" && activeProgram && selDay !== null) return (
     <WorkoutSession program={activeProgram} dayIndex={selDay} memberId={session.memberId}
-      memberCustom={!isUsingOther ? member?.customExercises : undefined}
+      memberCustom={!isUsingOther ? (member?.customExercises?.[activeProgram?.id] || member?.customExercises) : undefined}
       location={selGym}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
