@@ -34,6 +34,12 @@ function useFirebase(path, fallback = null) {
 function getSession() { try { return JSON.parse(localStorage.getItem("if-session-v2")); } catch { return null; } }
 function saveSession(s) { localStorage.setItem("if-session-v2", JSON.stringify(s)); }
 
+// Gym Locations (per-member, stored in localStorage)
+function getGyms(memberId) { try { return JSON.parse(localStorage.getItem(`if-gyms-${memberId}`)) || []; } catch { return []; } }
+function saveGyms(memberId, gyms) { localStorage.setItem(`if-gyms-${memberId}`, JSON.stringify(gyms)); }
+function getLastGym(memberId) { try { return localStorage.getItem(`if-last-gym-${memberId}`) || ""; } catch { return ""; } }
+function saveLastGym(memberId, gym) { localStorage.setItem(`if-last-gym-${memberId}`, gym); }
+
 // ═══════════════════════════════════════
 // ICONS
 // ═══════════════════════════════════════
@@ -53,10 +59,11 @@ const I = {
   Chart: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
   Clock: (p) => <svg width={p?.size||16} height={p?.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
   Camera: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
+  MapPin: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>,
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.3";
+const APP_VERSION = "v13.5";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -513,11 +520,56 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   const [selDay, setSelDay] = useState(null);
   const [activeProgId, setActiveProgId] = useState(null); // null = use assigned program
   const [showProgPicker, setShowProgPicker] = useState(false);
+  // Gym location management
+  const [gyms, setGyms] = useState(() => getGyms(session.memberId));
+  const [selGym, setSelGym] = useState(() => getLastGym(session.memberId));
+  const [showGymPicker, setShowGymPicker] = useState(false); // modal before workout start
+  const [showGymManager, setShowGymManager] = useState(false); // manage gym list
+  const [newGymName, setNewGymName] = useState("");
+  const [editGymIdx, setEditGymIdx] = useState(null);
+  const [editGymName, setEditGymName] = useState("");
+  const [pendingDay, setPendingDay] = useState(null); // day index waiting for gym pick
+
   const member = members.find((m) => m.id === session.memberId);
   const assignedProgram = programs.find((p) => p.id === member?.programId);
   const activeProgram = activeProgId ? programs.find((p) => p.id === activeProgId) : assignedProgram;
   const isUsingOther = activeProgId && activeProgId !== member?.programId;
   const myLogs = useMemo(() => logs.filter((l) => l.memberId === session.memberId).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [logs, session.memberId]);
+
+  // Gym CRUD
+  const addGym = () => {
+    const name = newGymName.trim();
+    if (!name || gyms.includes(name)) return;
+    const updated = [...gyms, name];
+    setGyms(updated); saveGyms(session.memberId, updated); setNewGymName("");
+  };
+  const removeGym = (idx) => {
+    const updated = gyms.filter((_, i) => i !== idx);
+    setGyms(updated); saveGyms(session.memberId, updated);
+    if (selGym === gyms[idx]) { setSelGym(""); saveLastGym(session.memberId, ""); }
+  };
+  const updateGym = (idx) => {
+    const name = editGymName.trim();
+    if (!name) return;
+    const oldName = gyms[idx];
+    const updated = [...gyms]; updated[idx] = name;
+    setGyms(updated); saveGyms(session.memberId, updated);
+    if (selGym === oldName) { setSelGym(name); saveLastGym(session.memberId, name); }
+    setEditGymIdx(null); setEditGymName("");
+  };
+  const handleDayClick = (dayIdx) => {
+    if (gyms.length > 0) {
+      setPendingDay(dayIdx);
+      setShowGymPicker(true);
+    } else {
+      setSelDay(dayIdx); setScreen("workout");
+    }
+  };
+  const confirmGymAndStart = (gymName) => {
+    setSelGym(gymName); saveLastGym(session.memberId, gymName);
+    setShowGymPicker(false);
+    setSelDay(pendingDay); setScreen("workout"); setPendingDay(null);
+  };
 
   // Check for in-progress workout sessions (must be before conditional returns)
   const hasInProgress = useCallback((prog, dayIdx) => {
@@ -532,6 +584,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   if (screen === "workout" && activeProgram && selDay !== null) return (
     <WorkoutSession program={activeProgram} dayIndex={selDay} memberId={session.memberId}
       memberCustom={!isUsingOther ? member?.customExercises : undefined}
+      location={selGym}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
   );
@@ -550,10 +603,25 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
       <Header title={session.memberName} subtitle="오늘도 한 세트 더" onLogout={onLogout}/>
       <div style={S.todayDate}><I.Calendar size={14}/> {todayStr}</div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("history")}><I.Calendar/><span>기록</span><span style={S.logCnt}>{myLogs.length}</span></button>
         <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("stats")}><I.Chart/><span>통계</span></button>
       </div>
+
+      {/* Gym Location Bar */}
+      <button style={{ ...S.histBtn, width: "100%", marginBottom: 12, justifyContent: "space-between" }}
+        onClick={() => setShowGymManager(true)}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <I.MapPin size={16}/>
+          <span style={{ fontWeight: 600 }}>운동 장소</span>
+          {selGym && <span style={{ fontSize: 12, color: "#6a9fd8", fontWeight: 600 }}>{selGym}</span>}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12, color: "#555" }}>{gyms.length}곳</span>
+          <span style={{ color: "#555", fontSize: 14 }}>›</span>
+        </span>
+      </button>
+
       <button style={{ ...S.histBtn, width: "100%", marginBottom: 20, background: "linear-gradient(135deg, rgba(0,229,255,0.08), rgba(124,77,255,0.08))", border: "1px solid rgba(0,229,255,0.2)" }}
         onClick={() => setScreen("aiCounter")}>
         <I.Camera/><span style={{ fontWeight: 600 }}>AI 캘리브레이션</span>
@@ -578,7 +646,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
               const done = myLogs.some((l) => l.dayName === day.dayName && l.programId === activeProgram.id && new Date(l.timestamp).toDateString() === todayDate);
               const inProgress = hasInProgress(activeProgram, i);
               return (
-                <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => { setSelDay(i); setScreen("workout"); }}>
+                <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => handleDayClick(i)}>
                   {done && <div style={S.doneChk}><I.Check size={14}/></div>}
                   {inProgress && !done && <div style={{ position: "absolute", top: 8, right: 8, fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.15)", padding: "2px 6px", borderRadius: 6, fontWeight: 700 }}>진행중</div>}
                   <div style={S.dayNum}>DAY {i + 1}</div>
@@ -622,6 +690,76 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
           )}
         </div>
       )}
+
+      {/* Version */}
+      <div style={{ textAlign: "center", marginTop: 32, fontSize: 11, color: "#333", fontFamily: "'JetBrains Mono', monospace" }}>{APP_VERSION}</div>
+
+      {/* Gym Picker Modal — shown before starting a workout */}
+      {showGymPicker && (
+        <div style={S.modalOverlay} onClick={() => { setShowGymPicker(false); setPendingDay(null); }}>
+          <div style={S.modalBox} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>운동 장소 선택</h3>
+            <p style={{ fontSize: 12, color: "#666", margin: "0 0 16px" }}>오늘 운동할 장소를 선택하세요</p>
+            {gyms.map((g, i) => (
+              <button key={i} style={{ width: "100%", padding: "14px 16px", background: g === selGym ? "rgba(106,159,216,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${g === selGym ? "rgba(106,159,216,0.3)" : "rgba(255,255,255,0.08)"}`, borderRadius: 12, marginBottom: 8, display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+                onClick={() => confirmGymAndStart(g)}>
+                <I.MapPin size={16} /><span style={{ fontSize: 14, fontWeight: 600 }}>{g}</span>
+                {g === selGym && <span style={{ marginLeft: "auto", fontSize: 11, color: "#6a9fd8", fontWeight: 600 }}>최근</span>}
+              </button>
+            ))}
+            <button style={{ width: "100%", padding: "12px", background: "none", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, color: "#888", fontSize: 13, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 4 }}
+              onClick={() => confirmGymAndStart("")}>장소 없이 시작</button>
+          </div>
+        </div>
+      )}
+
+      {/* Gym Manager Modal */}
+      {showGymManager && (
+        <div style={S.modalOverlay} onClick={() => setShowGymManager(false)}>
+          <div style={{ ...S.modalBox, maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: "#fff", margin: 0 }}>운동 장소 관리</h3>
+              <button style={{ background: "none", border: "none", color: "#888", fontSize: 18, cursor: "pointer", padding: "4px 8px" }} onClick={() => setShowGymManager(false)}>✕</button>
+            </div>
+
+            {/* Add new gym */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <input style={{ ...S.input, flex: 1, fontSize: 13, padding: "10px 12px" }} placeholder="새 장소 이름 (예: 에이블짐 강남점)" value={newGymName}
+                onChange={(e) => setNewGymName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addGym()}/>
+              <button style={{ background: "rgba(106,159,216,0.15)", border: "1px solid rgba(106,159,216,0.3)", borderRadius: 10, padding: "10px 16px", color: "#6a9fd8", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", flexShrink: 0 }}
+                onClick={addGym}>추가</button>
+            </div>
+
+            {gyms.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "30px 0", color: "#555", fontSize: 13 }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📍</div>
+                등록된 장소가 없습니다<br/><span style={{ fontSize: 12, color: "#444" }}>장소를 등록하면 운동 시작 시 선택할 수 있습니다</span>
+              </div>
+            ) : (
+              gyms.map((g, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, marginBottom: 6 }}>
+                  {editGymIdx === i ? (
+                    <>
+                      <input style={{ ...S.input, flex: 1, fontSize: 13, padding: "8px 10px" }} value={editGymName} onChange={(e) => setEditGymName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && updateGym(i)} autoFocus/>
+                      <button style={{ background: "none", border: "none", color: "#6a9fd8", cursor: "pointer", padding: 4, fontSize: 13, fontFamily: "'Noto Sans KR'" }} onClick={() => updateGym(i)}>저장</button>
+                      <button style={{ background: "none", border: "none", color: "#888", cursor: "pointer", padding: 4, fontSize: 13, fontFamily: "'Noto Sans KR'" }} onClick={() => setEditGymIdx(null)}>취소</button>
+                    </>
+                  ) : (
+                    <>
+                      <I.MapPin size={14}/>
+                      <span style={{ flex: 1, fontSize: 14, fontWeight: 500, color: "#e8e8e8" }}>{g}</span>
+                      {g === selGym && <span style={{ fontSize: 10, color: "#6a9fd8", background: "rgba(106,159,216,0.1)", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>최근</span>}
+                      <button style={S.iconBtn} onClick={() => { setEditGymIdx(i); setEditGymName(g); }}><I.Edit size={14}/></button>
+                      <button style={S.iconBtn} onClick={() => { if (confirm(`"${g}" 장소를 삭제할까요?`)) removeGym(i); }}><I.Trash size={14}/></button>
+                    </>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -629,7 +767,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
 // ═══════════════════════════════════════
 // WORKOUT SESSION (시작/종료 시간 기록, 관리자 설정 중량 표시)
 // ═══════════════════════════════════════
-function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, onBack }) {
+function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, onFinish, onBack }) {
   const day = program.days[dayIndex];
   const sessionKey = `if-workout-${memberId}-${program.id}-${dayIndex}`;
 
@@ -704,6 +842,7 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
     const endTime = new Date().toISOString();
     onFinish({ memberId, programId: program.id, programName: program.name, dayName: day.dayName, level: program.level,
       timestamp: startTime, startTime, endTime, date: new Date(startTime).toISOString().split("T")[0],
+      ...(location ? { location } : {}),
       exercises: exData.map((e) => ({ name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps })) })) });
   };
 
@@ -724,6 +863,7 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, onFinish, o
       <div style={S.workoutMeta}>
         <span><I.Calendar size={13}/> {todayStr}</span>
         <span><I.Clock size={13}/> 시작 {fmtTime(startTime)}</span>
+        {location && <span><I.MapPin size={13}/> {location}</span>}
       </div>
 
       <div style={S.exTabs}>{exData.map((e, i) => {
@@ -777,6 +917,7 @@ function HistoryView({ logs, onBack }) {
                     <span style={{ ...S.badgeSm, background: LEVELS[log.level]?.bg, color: LEVELS[log.level]?.color }}>{LEVELS[log.level]?.label}</span>
                     <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{log.dayName}</div>
                     <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{log.programName}</div>
+                    {log.location && <div style={{ fontSize: 10, color: "#888", marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}><I.MapPin size={10}/> {log.location}</div>}
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 12, color: "#555", fontFamily: "'JetBrains Mono'" }}>{fmtTime(log.startTime || log.timestamp)}</div>
@@ -1766,4 +1907,8 @@ const S = {
   calDay: { width: 32, height: 32, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 500, fontFamily: "'JetBrains Mono'", transition: "all 0.2s" },
   calDayWorkout: { background: "linear-gradient(135deg, #4a7ab5, #6a9fd8)", color: "#fff", fontWeight: 700, boxShadow: "0 0 8px rgba(106,159,216,0.3)" },
   calDayToday: { border: "2px solid #6a9fd8" },
+
+  // Modal
+  modalOverlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20, backdropFilter: "blur(4px)" },
+  modalBox: { width: "100%", maxWidth: 400, background: "#141414", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: 24 },
 };
