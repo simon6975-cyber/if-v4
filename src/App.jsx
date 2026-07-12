@@ -74,7 +74,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.8.1";
+const APP_VERSION = "v13.8.2";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -110,13 +110,18 @@ function groupPrograms(programs) {
   });
   return Object.values(groups);
 }
-// 그룹 내에서 특정 장소용 변형 찾기 (없으면 공용(NO_LOC) 변형으로 폴백)
+// 그룹 내에서 특정 장소용 변형 찾기
+// v13.8.2 — 폴백 순서: 정확히 일치하는 장소 > 공용(NO_LOC) > 첫 번째 변형
+//   이전에는 공용 변형이 없으면 null 을 돌려줘서, 관리자가 실제 장소(강남점 등)로만
+//   프로그램을 만든 경우 회원 화면이 통째로 비어 버렸다.
 function pickVariant(variants, locationId) {
-  if (!variants || !variants.length) return null;
-  const exact = variants.find((v) => (v.locationId || NO_LOC) === (locationId || NO_LOC));
+  const vs = toArray(variants);
+  if (!vs.length) return null;
+  const exact = vs.find((v) => (v.locationId || NO_LOC) === (locationId || NO_LOC));
   if (exact) return exact;
-  const shared = variants.find((v) => !v.locationId || v.locationId === NO_LOC);
-  return shared || null;
+  const shared = vs.find((v) => !v.locationId || v.locationId === NO_LOC);
+  if (shared) return shared;
+  return vs[0]; // 공용 버전이 없으면 첫 번째 장소 버전을 기본으로 보여준다
 }
 
 // v13.8.1 — 회원에게 배정된 프로그램 "그룹"을 구한다.
@@ -879,12 +884,12 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
   }, [activeGroup]);
 
   const handleDayClick = (dayIdx) => {
-    if (availableLocs.length > 1) {
+    // v13.8.2 — 장소 버전이 2개 이상이거나, 아직 이 그룹의 장소를 고르지 않았다면 먼저 장소를 묻는다
+    const chosen = availableLocs.includes(selLocId || NO_LOC);
+    if (availableLocs.length > 1 || !chosen) {
       setPendingDay(dayIdx);
       setShowLocPicker(true);
     } else {
-      const only = availableLocs[0];
-      if (only && only !== selLocId) { setSelLocId(only); saveLastGym(session.memberId, only); }
       setSelDay(dayIdx); setScreen("workout");
     }
   };
@@ -986,16 +991,16 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
               {/* 장소 선택 바 — 관리자가 저장해 둔 장소 버전 중에서만 선택 */}
               <button style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 14px", marginBottom: 16,
                 background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 12,
-                cursor: availableLocs.length > 1 ? "pointer" : "default",
+                cursor: availableLocs.length ? "pointer" : "default",
                 fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
-                onClick={() => { if (availableLocs.length > 1) { setPendingDay(null); setShowLocPicker(true); } }}>
+                onClick={() => { if (availableLocs.length) { setPendingDay(null); setShowLocPicker(true); } }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <I.MapPin size={16}/>
                   <span style={{ fontSize: 13, fontWeight: 600 }}>{locName(activeProgram.locationId)}</span>
                 </span>
-                {availableLocs.length > 1
-                  ? <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600 }}>장소 변경 ({availableLocs.length}곳) ›</span>
-                  : <span style={{ fontSize: 11, color: "#555" }}>장소 1곳</span>}
+                <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600 }}>
+                  {availableLocs.length > 1 ? `장소 변경 (${availableLocs.length}곳) ›` : "장소 확인 ›"}
+                </span>
               </button>
 
               <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
