@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue } from "firebase/database";
 
@@ -70,11 +70,12 @@ const I = {
   Chart: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
   Clock: (p) => <svg width={p?.size||16} height={p?.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
   Camera: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
+  Grip: (p) => <svg width={p?.size||16} height={p?.size||16} viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>,
   MapPin: (p) => <svg width={p?.size||18} height={p?.size||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>,
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.8.2";
+const APP_VERSION = "v13.9";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -95,7 +96,104 @@ function toArray(v) {
   return [];
 }
 
-// v13.7 — 프로그램 그룹 키: 같은 이름+수준+방식 = 같은 프로그램, 장소만 다른 변형
+// v13.9 — 배열 순서 이동 (드래그 정렬용)
+function moveItem(arr, from, to) {
+  const a = [...arr];
+  if (from === to || from < 0 || to < 0 || from >= a.length || to >= a.length) return a;
+  const [it] = a.splice(from, 1);
+  a.splice(to, 0, it);
+  return a;
+}
+
+// v13.9 — 회원별 맞춤 운동 목록 해석
+//
+// 표준 프로그램(program.days[di].exercises)을 기본으로 쓰되,
+// 관리자가 회원별로 종목을 고치면 customExercises[progId].__days[di] 에
+// "그 회원 전용 운동 목록" 전체가 저장된다.
+//
+// 저장 형태: [{ name, note, sets: [{ weight, reps }, ...] }, ...]
+// 없으면 표준 프로그램 + 기존 인덱스 방식(customExercises[progId]["di-ei"]) 으로 폴백.
+function resolveDayExercises(program, dayIndex, progCustom) {
+  const day = toArray(program?.days)[dayIndex];
+  const baseEx = toArray(day?.exercises);
+
+  const override = toArray(progCustom?.__days?.[dayIndex]);
+  if (override.length) {
+    return override.map((ex) => ({
+      name: ex.name || "",
+      note: ex.note || "",
+      sets: toArray(ex.sets).map((s) => ({ weight: s?.weight || "", reps: s?.reps || "" })),
+    }));
+  }
+
+  // 폴백 — 표준 프로그램에 기존 인덱스 커스텀(중량/횟수)을 덮어씌운다
+  return baseEx.map((ex, ei) => {
+    const cv = progCustom?.[`${dayIndex}-${ei}`];
+    const cs = toArray(cv?.sets);
+    const n = ex.sets || cs.length || 1;
+    return {
+      name: ex.name || "",
+      note: ex.note || "",
+      sets: Array.from({ length: n }, (_, si) => ({
+        weight: cs[si]?.weight || "",
+        reps: cs[si]?.reps || ex.reps || "",
+      })),
+    };
+  });
+}
+// v13.9 — 드래그 정렬 훅 (마우스 + 터치 모두 지원)
+// onReorder(fromIndex, toIndex) 를 받아, 각 항목에 붙일 props 를 만들어 준다.
+function useDragList(onReorder) {
+  const [dragIdx, setDragIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
+  const dragRef = useRef(null);   // 터치용: 현재 끌고 있는 인덱스
+  const overRef = useRef(null);
+
+  const finish = useCallback(() => {
+    const from = dragRef.current, to = overRef.current;
+    if (from !== null && to !== null && from !== to) onReorder(from, to);
+    dragRef.current = null; overRef.current = null;
+    setDragIdx(null); setOverIdx(null);
+  }, [onReorder]);
+
+  // 항목(행) 전체에 붙는 props — 드롭 대상 역할
+  const itemProps = (i) => ({
+    onDragOver: (e) => { e.preventDefault(); overRef.current = i; setOverIdx(i); },
+    onDrop: (e) => { e.preventDefault(); finish(); },
+    style: {
+      opacity: dragIdx === i ? 0.35 : 1,
+      borderTop: overIdx === i && dragIdx !== null && dragIdx !== i ? "2px solid #6a9fd8" : "2px solid transparent",
+      transition: "opacity 0.15s",
+    },
+  });
+
+  // 손잡이(≡)에 붙는 props — 여기를 잡아야만 끌린다 (입력칸 조작 방해 방지)
+  const handleProps = (i) => ({
+    draggable: true,
+    onDragStart: (e) => {
+      dragRef.current = i; setDragIdx(i);
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", String(i)); } catch { /* Safari */ }
+    },
+    onDragEnd: () => finish(),
+    // 모바일 터치 지원
+    onTouchStart: () => { dragRef.current = i; setDragIdx(i); },
+    onTouchMove: (e) => {
+      const t = e.touches[0];
+      const el = document.elementFromPoint(t.clientX, t.clientY);
+      const row = el?.closest?.("[data-drag-idx]");
+      if (row) {
+        const to = parseInt(row.getAttribute("data-drag-idx"), 10);
+        if (!Number.isNaN(to)) { overRef.current = to; setOverIdx(to); }
+      }
+    },
+    onTouchEnd: () => finish(),
+    style: { cursor: "grab", touchAction: "none", flexShrink: 0, color: "#555", display: "flex", alignItems: "center", padding: "0 2px" },
+  });
+
+  return { itemProps, handleProps, dragIdx };
+}
+
 function groupKey(p) { return `${(p.name || "").trim()}||${p.level || "beginner"}||${p.type || "split"}`; }
 function groupPrograms(programs) {
   const groups = {};
@@ -608,26 +706,97 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
     });
   };
 
-  // 특정 프로그램 변형(progId)의 세트값 수정
-  const updateSetVal = (progId, key, si, field, value) => {
+  // ─── v13.9: 회원별 맞춤 운동 목록 편집 ───
+  // 표준 프로그램을 그대로 쓰지 않고, 이 회원 전용 운동 목록을
+  // customExercises[progId].__days[dayIndex] 에 통째로 저장한다.
+  // (종목 추가/삭제/이름변경/순서변경 + 세트별 중량/횟수까지 전부 여기서 관리)
+
+  // 현재 화면에 그릴 운동 목록 (아직 커스텀 안 했으면 표준 프로그램에서 만들어 준다)
+  const dayExercisesFor = useCallback((prog, di) =>
+    resolveDayExercises(prog, di, m.customExercises?.[prog.id]), [m.customExercises]);
+
+  // 운동 목록을 통째로 갈아끼우는 공통 함수
+  const setDayExercises = useCallback((progId, di, updater) => {
     setM((prev) => {
       const allCustom = { ...prev.customExercises };
       const progCustom = { ...(allCustom[progId] || {}) };
-      const entry = { ...progCustom[key], sets: [...(progCustom[key]?.sets || [])] };
-      entry.sets[si] = { ...entry.sets[si], [field]: value };
-      progCustom[key] = entry;
+      const days = { ...(progCustom.__days || {}) };
+      const cur = toArray(days[di]);
+      days[di] = updater(cur);
+      progCustom.__days = days;
       allCustom[progId] = progCustom;
       return { ...prev, customExercises: allCustom };
     });
-  };
+  }, []);
 
-  // 해당 변형의 세트 데이터 (없으면 프로그램 기본값으로 폴백해서 렌더)
-  const setsFor = (prog, di, ei, ex) => {
-    const cv = m.customExercises?.[prog.id]?.[`${di}-${ei}`];
-    if (cv?.sets?.length === ex.sets) return cv.sets;
-    const existing = cv?.sets || [];
-    return Array.from({ length: ex.sets }, (_, i) => existing[i] || { weight: "", reps: ex.reps });
-  };
+  // 화면에 보이는 목록을 확정 저장 (첫 편집 시 표준 프로그램 → 커스텀으로 승격)
+  const ensureDay = useCallback((prog, di) => {
+    const existing = toArray(m.customExercises?.[prog.id]?.__days?.[di]);
+    return existing.length ? existing : resolveDayExercises(prog, di, m.customExercises?.[prog.id]);
+  }, [m.customExercises]);
+
+  const editEx = useCallback((prog, di, ei, field, value) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => base.map((ex, i) => i === ei ? { ...ex, [field]: value } : ex));
+  }, [ensureDay, setDayExercises]);
+
+  const editSet = useCallback((prog, di, ei, si, field, value) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => base.map((ex, i) => {
+      if (i !== ei) return ex;
+      const sets = toArray(ex.sets).map((s, j) => j === si ? { ...s, [field]: value } : s);
+      return { ...ex, sets };
+    }));
+  }, [ensureDay, setDayExercises]);
+
+  const addExercise = useCallback((prog, di) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => [...base, { name: "", note: "", sets: [{ weight: "", reps: "10" }, { weight: "", reps: "10" }, { weight: "", reps: "10" }] }]);
+  }, [ensureDay, setDayExercises]);
+
+  const removeExercise = useCallback((prog, di, ei) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => base.filter((_, i) => i !== ei));
+  }, [ensureDay, setDayExercises]);
+
+  const moveExercise = useCallback((prog, di, from, to) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => moveItem(base, from, to));
+  }, [ensureDay, setDayExercises]);
+
+  const addSet = useCallback((prog, di, ei) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => base.map((ex, i) => {
+      if (i !== ei) return ex;
+      const sets = toArray(ex.sets);
+      const last = sets[sets.length - 1];
+      return { ...ex, sets: [...sets, { weight: last?.weight || "", reps: last?.reps || "10" }] };
+    }));
+  }, [ensureDay, setDayExercises]);
+
+  const removeSet = useCallback((prog, di, ei, si) => {
+    const base = ensureDay(prog, di);
+    setDayExercises(prog.id, di, () => base.map((ex, i) => {
+      if (i !== ei) return ex;
+      const sets = toArray(ex.sets).filter((_, j) => j !== si);
+      return { ...ex, sets: sets.length ? sets : [{ weight: "", reps: "10" }] };
+    }));
+  }, [ensureDay, setDayExercises]);
+
+  // 이 회원의 맞춤 설정을 지우고 표준 프로그램으로 되돌리기
+  const resetDay = useCallback((prog, di) => {
+    setM((prev) => {
+      const allCustom = { ...prev.customExercises };
+      const progCustom = { ...(allCustom[prog.id] || {}) };
+      const days = { ...(progCustom.__days || {}) };
+      delete days[di];
+      progCustom.__days = days;
+      allCustom[prog.id] = progCustom;
+      return { ...prev, customExercises: allCustom };
+    });
+  }, []);
+
+  const isCustomized = (prog, di) => toArray(m.customExercises?.[prog.id]?.__days?.[di]).length > 0;
 
   return (
     <div style={S.container}>
@@ -681,58 +850,32 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
               {on && (
                 <button style={{ background: "none", border: "none", color: "#6a9fd8", fontSize: 11, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", padding: "4px 6px", flexShrink: 0, textDecoration: "underline" }}
                   onClick={() => setOpenGroup(open ? null : g.key)}>
-                  {open ? "설정 닫기" : "중량/횟수 설정"}
+                  {open ? "설정 닫기" : "맞춤 설정"}
                 </button>
               )}
             </div>
 
-            {/* 배정된 그룹의 장소별 변형마다 세트/중량/횟수 개인 설정 */}
+            {/* v13.9 — 배정된 그룹의 장소별 변형마다: 운동 종목/순서/세트/중량/횟수 전부 개인 맞춤 */}
             {on && open && (
               <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <p style={{ fontSize: 11, color: "#666", margin: "0 0 12px", lineHeight: 1.5 }}>
+                  표준 프로그램을 이 회원에 맞게 고칠 수 있습니다. 종목 추가·삭제·이름 변경, <I.Grip size={11}/> 손잡이를 끌어 순서 변경,
+                  세트별 중량/횟수 설정까지 가능합니다. 여기서 고친 내용은 <b style={{ color: "#888" }}>이 회원에게만</b> 적용됩니다.
+                </p>
                 {g.variants.map((prog) => (
                   <div key={prog.id} style={{ marginBottom: 16 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
                       <I.MapPin size={13}/>
                       <span style={{ fontSize: 13, fontWeight: 700, color: "#a78bfa" }}>{locLabel(prog.locationId)}</span>
-                      <span style={{ fontSize: 11, color: "#555" }}>루틴 {prog.days.length}개</span>
+                      <span style={{ fontSize: 11, color: "#555" }}>루틴 {toArray(prog.days).length}개</span>
                     </div>
-                    {prog.days.map((day, di) => (
-                      <div key={di} style={S.customDayBlock}>
-                        <div style={S.customDayTitle}>{day.dayName}</div>
-                        {day.exercises.map((ex, ei) => {
-                          const key = `${di}-${ei}`;
-                          const sets = setsFor(prog, di, ei, ex);
-                          return (
-                            <div key={ei} style={S.customExBlock}>
-                              <div style={S.customExHeader}>
-                                <span style={S.customExNum}>{ei + 1}</span>
-                                <span style={S.customExName}>{ex.name || `운동 ${ei+1}`}</span>
-                                <span style={{ fontSize: 11, color: "#555" }}>{sets.length}세트</span>
-                              </div>
-                              <div style={S.customSetGrid}>
-                                <div style={S.customSetHeaderRow}>
-                                  <span style={S.customSetHCell}>세트</span>
-                                  <span style={S.customSetHCellW}>중량(kg)</span>
-                                  <span style={S.customSetHCellW}>횟수</span>
-                                </div>
-                                {sets.map((s, si) => (
-                                  <div key={si} style={S.customSetRow}>
-                                    <span style={S.customSetCell}>{si + 1}</span>
-                                    <span style={S.customSetCellW}>
-                                      <input style={S.customSetInput} type="number" inputMode="decimal" placeholder="kg"
-                                        value={s.weight || ""} onChange={(e) => updateSetVal(prog.id, key, si, "weight", e.target.value)}/>
-                                    </span>
-                                    <span style={S.customSetCellW}>
-                                      <input style={S.customSetInput} inputMode="numeric" placeholder={ex.reps}
-                                        value={s.reps || ""} onChange={(e) => updateSetVal(prog.id, key, si, "reps", e.target.value)}/>
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                    {toArray(prog.days).map((day, di) => (
+                      <MemberDayEditor key={di} prog={prog} dayIndex={di} dayName={day.dayName}
+                        exercises={dayExercisesFor(prog, di)}
+                        customized={isCustomized(prog, di)}
+                        onEditEx={editEx} onEditSet={editSet}
+                        onAddEx={addExercise} onRemoveEx={removeExercise} onMoveEx={moveExercise}
+                        onAddSet={addSet} onRemoveSet={removeSet} onReset={resetDay}/>
                     ))}
                   </div>
                 ))}
@@ -751,6 +894,85 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
 }
 
 
+// ─── v13.9: 회원별 루틴 편집기 (종목 추가/삭제/이름/순서 + 세트별 중량/횟수) ───
+function MemberDayEditor({ prog, dayIndex, dayName, exercises, customized,
+  onEditEx, onEditSet, onAddEx, onRemoveEx, onMoveEx, onAddSet, onRemoveSet, onReset }) {
+  const onReorder = useCallback((from, to) => onMoveEx(prog, dayIndex, from, to), [prog, dayIndex, onMoveEx]);
+  const { itemProps, handleProps } = useDragList(onReorder);
+
+  return (
+    <div style={S.customDayBlock}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ ...S.customDayTitle, marginBottom: 0, flex: 1 }}>{dayName}</span>
+        {customized
+          ? <span style={{ fontSize: 10, color: "#22c55e", background: "rgba(34,197,94,0.1)", padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>맞춤</span>
+          : <span style={{ fontSize: 10, color: "#555" }}>표준</span>}
+        {customized && (
+          <button style={{ background: "none", border: "none", color: "#888", fontSize: 10, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", textDecoration: "underline", padding: "2px 4px" }}
+            onClick={() => { if (confirm(`"${dayName}"을(를) 표준 프로그램으로 되돌릴까요?\n이 회원의 맞춤 설정이 삭제됩니다.`)) onReset(prog, dayIndex); }}>
+            표준으로 되돌리기
+          </button>
+        )}
+      </div>
+
+      {exercises.length === 0 && (
+        <div style={{ textAlign: "center", padding: "16px 0", color: "#555", fontSize: 12 }}>운동이 없습니다</div>
+      )}
+
+      {exercises.map((ex, ei) => (
+        <div key={ei} data-drag-idx={ei} {...itemProps(ei)} style={{ ...S.customExBlock, ...itemProps(ei).style }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <span {...handleProps(ei)} title="끌어서 순서 변경"><I.Grip size={15}/></span>
+            <span style={S.customExNum}>{ei + 1}</span>
+            <input style={{ ...S.inputSm, flex: 1, fontWeight: 600 }} placeholder={`운동 ${ei + 1}`}
+              value={ex.name} onChange={(e) => onEditEx(prog, dayIndex, ei, "name", e.target.value)}/>
+            <button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} title="운동 삭제"
+              onClick={() => { if (confirm(`"${ex.name || `운동 ${ei + 1}`}"을(를) 삭제할까요?`)) onRemoveEx(prog, dayIndex, ei); }}>
+              <I.Trash size={14}/>
+            </button>
+          </div>
+
+          <div style={S.customSetGrid}>
+            <div style={S.customSetHeaderRow}>
+              <span style={S.customSetHCell}>세트</span>
+              <span style={S.customSetHCellW}>중량(kg)</span>
+              <span style={S.customSetHCellW}>횟수</span>
+              <span style={{ width: 24 }}/>
+            </div>
+            {toArray(ex.sets).map((s, si) => (
+              <div key={si} style={S.customSetRow}>
+                <span style={S.customSetCell}>{si + 1}</span>
+                <span style={S.customSetCellW}>
+                  <input style={S.customSetInput} type="number" inputMode="decimal" placeholder="kg"
+                    value={s.weight || ""} onChange={(e) => onEditSet(prog, dayIndex, ei, si, "weight", e.target.value)}/>
+                </span>
+                <span style={S.customSetCellW}>
+                  <input style={S.customSetInput} inputMode="numeric" placeholder="횟수"
+                    value={s.reps || ""} onChange={(e) => onEditSet(prog, dayIndex, ei, si, "reps", e.target.value)}/>
+                </span>
+                <button style={{ width: 24, background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 14, padding: 0 }}
+                  title="세트 삭제" onClick={() => onRemoveSet(prog, dayIndex, ei, si)}>−</button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <button style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "6px", color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif" }}
+              onClick={() => onAddSet(prog, dayIndex, ei)}>+ 세트 추가</button>
+          </div>
+
+          <input style={{ ...S.inputSm, marginTop: 6 }} placeholder="참고사항 (선택)"
+            value={ex.note || ""} onChange={(e) => onEditEx(prog, dayIndex, ei, "note", e.target.value)}/>
+        </div>
+      ))}
+
+      <button style={S.addExBtn} onClick={() => onAddEx(prog, dayIndex)}>
+        <I.Plus size={14}/> 이 회원에게 운동 추가
+      </button>
+    </div>
+  );
+}
+
 // ─── Program Form (운동: 이름, 세트, 횟수, 중량 — 휴식 제거) ───
 function ProgramForm({ program, locations = [], programs = [], onSave, onCancel }) {
   const [p, setP] = useState(() => {
@@ -767,6 +989,13 @@ function ProgramForm({ program, locations = [], programs = [], onSave, onCancel 
   const rmDay = (di) => setP((prev) => ({ ...prev, days: prev.days.filter((_, i) => i !== di) }));
   const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", note: "" }] }; return { ...prev, days: d }; });
   const rmEx = (di, ei) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: d[di].exercises.filter((_, i) => i !== ei) }; return { ...prev, days: d }; });
+  // v13.9 — 드래그로 순서 변경
+  const moveEx = useCallback((di, from, to) => setP((prev) => {
+    const d = [...prev.days];
+    d[di] = { ...d[di], exercises: moveItem(d[di].exercises, from, to) };
+    return { ...prev, days: d };
+  }), []);
+  const moveDay = useCallback((from, to) => setP((prev) => ({ ...prev, days: moveItem(prev.days, from, to) })), []);
 
   return (
     <div style={S.container}>
@@ -802,24 +1031,11 @@ function ProgramForm({ program, locations = [], programs = [], onSave, onCancel 
       <div style={{ ...S.fg }}><label style={S.label}>주간 횟수</label>
         <input style={S.input} type="number" inputMode="numeric" value={p.daysPerWeek} onChange={(e) => u("daysPerWeek", parseInt(e.target.value)||0)}/></div>
       <div style={S.divider}/>
-      {p.days.map((day, di) => (
-        <div key={di} style={S.dayEd}>
-          <div style={S.dayEdHead}>
-            <input style={{ ...S.input, fontWeight: 600 }} value={day.dayName} onChange={(e) => uDay(di, "dayName", e.target.value)}/>
-            {p.days.length > 1 && <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => rmDay(di)}><I.Trash/></button>}
-          </div>
-          {day.exercises.map((ex, ei) => (
-            <div key={ei} style={S.exEd}>
-              <div style={S.exEdRow}><span style={S.exNum}>{ei + 1}</span><input style={{ ...S.inputSm, flex: 2 }} placeholder="운동 이름" value={ex.name} onChange={(e) => uEx(di, ei, "name", e.target.value)}/><button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} onClick={() => rmEx(di, ei)}><I.Trash/></button></div>
-              <div style={S.exEdRow}>
-                <div style={S.mini}><span style={S.miniL}>세트</span><input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(di, ei, "sets", e.target.value)}/></div>
-              </div>
-              <input style={S.inputSm} placeholder="참고사항 (선택)" value={ex.note} onChange={(e) => uEx(di, ei, "note", e.target.value)}/>
-            </div>
-          ))}
-          <button style={S.addExBtn} onClick={() => addEx(di)}><I.Plus size={14}/> 운동 추가</button>
-        </div>
-      ))}
+      <p style={{ fontSize: 11, color: "#666", margin: "0 0 10px", display: "flex", alignItems: "center", gap: 5 }}>
+        <I.Grip size={13}/> 손잡이를 끌어서 루틴과 운동 순서를 바꿀 수 있습니다
+      </p>
+      <ProgramDayList days={p.days} uDay={uDay} rmDay={rmDay} uEx={uEx} addEx={addEx} rmEx={rmEx}
+        moveEx={moveEx} moveDay={moveDay}/>
       <div style={{ display: "flex", gap: 8 }}>
         <button style={{ ...S.addDayBtn, flex: 1 }} onClick={addDay}><I.Plus/> 빈 루틴 추가</button>
         {p.days.length >= 1 && <button style={{ ...S.addDayBtn, flex: 1, background: "rgba(34,197,94,0.06)", borderColor: "rgba(34,197,94,0.2)", color: "#22c55e" }} onClick={copyDay1}>Day 1 복사</button>}
@@ -836,6 +1052,50 @@ function ProgramForm({ program, locations = [], programs = [], onSave, onCancel 
         }}>저장</button>
       </div>
     </div>
+  );
+}
+
+// ─── v13.9: 드래그 정렬 가능한 루틴/운동 목록 (프로그램 생성용) ───
+function ProgramDayList({ days, uDay, rmDay, uEx, addEx, rmEx, moveEx, moveDay }) {
+  const { itemProps, handleProps } = useDragList(moveDay);
+  return (
+    <>
+      {days.map((day, di) => (
+        <div key={di} data-drag-idx={di} {...itemProps(di)} style={{ ...S.dayEd, ...itemProps(di).style }}>
+          <div style={S.dayEdHead}>
+            <span {...handleProps(di)} title="끌어서 루틴 순서 변경"><I.Grip size={18}/></span>
+            <input style={{ ...S.input, fontWeight: 600 }} value={day.dayName} onChange={(e) => uDay(di, "dayName", e.target.value)}/>
+            {days.length > 1 && <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => rmDay(di)}><I.Trash/></button>}
+          </div>
+          <ProgramExerciseList dayIndex={di} exercises={day.exercises} uEx={uEx} rmEx={rmEx} moveEx={moveEx}/>
+          <button style={S.addExBtn} onClick={() => addEx(di)}><I.Plus size={14}/> 운동 추가</button>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function ProgramExerciseList({ dayIndex, exercises, uEx, rmEx, moveEx }) {
+  const onReorder = useCallback((from, to) => moveEx(dayIndex, from, to), [dayIndex, moveEx]);
+  const { itemProps, handleProps } = useDragList(onReorder);
+  return (
+    <>
+      {exercises.map((ex, ei) => (
+        <div key={ei} data-drag-idx={ei} {...itemProps(ei)} style={{ ...S.exEd, ...itemProps(ei).style }}>
+          <div style={S.exEdRow}>
+            <span {...handleProps(ei)} title="끌어서 운동 순서 변경"><I.Grip size={16}/></span>
+            <span style={S.exNum}>{ei + 1}</span>
+            <input style={{ ...S.inputSm, flex: 2 }} placeholder="운동 이름" value={ex.name} onChange={(e) => uEx(dayIndex, ei, "name", e.target.value)}/>
+            <button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} onClick={() => rmEx(dayIndex, ei)}><I.Trash/></button>
+          </div>
+          <div style={S.exEdRow}>
+            <div style={S.mini}><span style={S.miniL}>세트</span>
+              <input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(dayIndex, ei, "sets", e.target.value)}/></div>
+          </div>
+          <input style={S.inputSm} placeholder="참고사항 (선택)" value={ex.note} onChange={(e) => uEx(dayIndex, ei, "note", e.target.value)}/>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -1009,13 +1269,15 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
                   const todayDate = new Date().toDateString();
                   const done = myLogs.some((l) => l.dayName === day.dayName && l.programId === activeProgram.id && new Date(l.timestamp).toDateString() === todayDate);
                   const inProgress = hasInProgress(activeProgram, i);
+                  // v13.9 — 이 회원 맞춤 종목 수 (맞춤 설정이 있으면 그 개수)
+                  const exCount = resolveDayExercises(activeProgram, i, member?.customExercises?.[activeProgram.id]).length;
                   return (
                     <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => handleDayClick(i)}>
                       {done && <div style={S.doneChk}><I.Check size={14}/></div>}
                       {inProgress && !done && <div style={{ position: "absolute", top: 8, right: 8, fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.15)", padding: "2px 6px", borderRadius: 6, fontWeight: 700 }}>진행중</div>}
                       <div style={S.dayNum}>DAY {i + 1}</div>
                       <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{day.dayName}</div>
-                      <div style={{ fontSize: 12, color: "#666" }}>{day.exercises.length}종목</div>
+                      <div style={{ fontSize: 12, color: "#666" }}>{exCount}종목</div>
                     </button>
                   );
                 })}
@@ -1068,6 +1330,13 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, o
   const day = program.days[dayIndex];
   const sessionKey = `if-workout-${memberId}-${program.id}-${dayIndex}`;
 
+  // v13.9 — 이 회원에게 맞춤 설정된 운동 목록 (없으면 표준 프로그램)
+  //   종목 추가/삭제/이름변경/순서변경이 여기서 그대로 반영된다.
+  const dayExercises = useMemo(
+    () => resolveDayExercises(program, dayIndex, memberCustom),
+    [program, dayIndex, memberCustom]
+  );
+
   const [startTime] = useState(() => {
     try { const saved = JSON.parse(localStorage.getItem(sessionKey)); if (saved?.startTime) return saved.startTime; } catch {}
     return new Date().toISOString();
@@ -1078,25 +1347,19 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, o
     try {
       const saved = JSON.parse(localStorage.getItem(sessionKey));
       if (saved?.exData && saved?.programId === program.id && saved?.dayIndex === dayIndex) {
-        // Verify structure matches (same exercises/sets count)
-        const matches = saved.exData.length === day.exercises.length &&
-          saved.exData.every((e, i) => e.name === day.exercises[i].name);
+        // 구조가 같을 때만 복원 (관리자가 종목을 바꿨으면 새로 시작)
+        const matches = saved.exData.length === dayExercises.length &&
+          saved.exData.every((e, i) => e.name === dayExercises[i].name);
         if (matches) return saved.exData;
       }
     } catch {}
-    // Fresh init
-    return day.exercises.map((ex, ei) => {
-      const custom = memberCustom?.[`${dayIndex}-${ei}`];
-      const customSets = custom?.sets;
-      return {
-        name: ex.name,
-        sets: Array.from({ length: ex.sets }, (_, si) => {
-          const cs = customSets?.[si];
-          return { weight: cs?.weight || "", reps: cs?.reps || ex.reps || "", done: false };
-        }),
-        targetReps: ex.reps, note: ex.note,
-      };
-    });
+    // Fresh init — 맞춤 목록 기준
+    return dayExercises.map((ex) => ({
+      name: ex.name,
+      sets: toArray(ex.sets).map((s) => ({ weight: s.weight || "", reps: s.reps || "", done: false })),
+      targetReps: toArray(ex.sets)[0]?.reps || "",
+      note: ex.note,
+    }));
   });
   const [activeEx, setActiveEx] = useState(() => {
     try { const saved = JSON.parse(localStorage.getItem(sessionKey)); return saved?.activeEx || 0; } catch { return 0; }
