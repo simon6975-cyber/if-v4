@@ -75,7 +75,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.9";
+const APP_VERSION = "v13.9.1";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -1246,23 +1246,10 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
                 <span style={S.chip}>주 {activeProgram.daysPerWeek}일</span>
               </div>
               <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{activeGroup.name}</h3>
-              <p style={{ fontSize: 13, color: "#888", marginBottom: 12 }}>{activeProgram.description}</p>
+              <p style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>{activeProgram.description}</p>
 
-              {/* 장소 선택 바 — 관리자가 저장해 둔 장소 버전 중에서만 선택 */}
-              <button style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 14px", marginBottom: 16,
-                background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 12,
-                cursor: availableLocs.length ? "pointer" : "default",
-                fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
-                onClick={() => { if (availableLocs.length) { setPendingDay(null); setShowLocPicker(true); } }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <I.MapPin size={16}/>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{locName(activeProgram.locationId)}</span>
-                </span>
-                <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600 }}>
-                  {availableLocs.length > 1 ? `장소 변경 (${availableLocs.length}곳) ›` : "장소 확인 ›"}
-                </span>
-              </button>
-
+              {/* v13.9.1 — 첫 화면의 장소 선택 바 삭제.
+                  루틴(Day)을 고르면 그때 장소를 선택하므로 중복이었다. */}
               <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
               <div style={S.dayGrid}>
                 {activeProgram.days.map((day, i) => {
