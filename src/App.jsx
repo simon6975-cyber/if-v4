@@ -34,11 +34,10 @@ function useFirebase(path, fallback = null) {
 function getSession() { try { return JSON.parse(localStorage.getItem("if-session-v2")); } catch { return null; } }
 function saveSession(s) { localStorage.setItem("if-session-v2", JSON.stringify(s)); }
 
-// Gym Locations (per-member, stored in localStorage)
-function getGyms(memberId) { try { return JSON.parse(localStorage.getItem(`if-gyms-${memberId}`)) || []; } catch { return []; } }
-function saveGyms(memberId, gyms) { localStorage.setItem(`if-gyms-${memberId}`, JSON.stringify(gyms)); }
-function getLastGym(memberId) { try { return localStorage.getItem(`if-last-gym-${memberId}`) || ""; } catch { return ""; } }
-function saveLastGym(memberId, gym) { localStorage.setItem(`if-last-gym-${memberId}`, gym); }
+// v13.7 — 운동 장소는 관리자가 Firebase(locations)에 등록.
+// 회원 단말에는 "마지막으로 선택한 장소 id"만 저장한다.
+function getLastGym(memberId) { try { return localStorage.getItem(`if-last-loc-${memberId}`) || ""; } catch { return ""; } }
+function saveLastGym(memberId, locId) { localStorage.setItem(`if-last-loc-${memberId}`, locId || ""); }
 
 // ═══════════════════════════════════════
 // ICONS
@@ -63,12 +62,38 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.6";
+const APP_VERSION = "v13.7";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
   advanced: { label: "고급", color: "#ef4444", bg: "#450a0a", accent: "rgba(239,68,68,0.12)" },
 };
+// v13.7 — 프로그램 방식 (분할 / 서킷)
+const TYPES = {
+  split: { label: "분할", color: "#6a9fd8", bg: "#0c1e30", accent: "rgba(106,159,216,0.12)" },
+  circuit: { label: "서킷", color: "#a78bfa", bg: "#1e1b3a", accent: "rgba(167,139,250,0.12)" },
+};
+const NO_LOC = "__none__"; // 장소 지정 없음(공용) 프로그램
+
+// v13.7 — 프로그램 그룹 키: 같은 이름+수준+방식 = 같은 프로그램, 장소만 다른 변형
+function groupKey(p) { return `${(p.name || "").trim()}||${p.level || "beginner"}||${p.type || "split"}`; }
+function groupPrograms(programs) {
+  const groups = {};
+  (programs || []).forEach((p) => {
+    const k = groupKey(p);
+    if (!groups[k]) groups[k] = { key: k, name: p.name, level: p.level || "beginner", type: p.type || "split", description: p.description, variants: [] };
+    groups[k].variants.push(p);
+  });
+  return Object.values(groups);
+}
+// 그룹 내에서 특정 장소용 변형 찾기 (없으면 공용(NO_LOC) 변형으로 폴백)
+function pickVariant(variants, locationId) {
+  if (!variants || !variants.length) return null;
+  const exact = variants.find((v) => (v.locationId || NO_LOC) === (locationId || NO_LOC));
+  if (exact) return exact;
+  const shared = variants.find((v) => !v.locationId || v.locationId === NO_LOC);
+  return shared || null;
+}
 
 // ═══════════════════════════════════════
 // HELPERS
@@ -88,17 +113,21 @@ export default function App() {
   const [membersRaw, membersLoaded] = useFirebase("members", {});
   const [programsRaw, programsLoaded] = useFirebase("programs", {});
   const [logsRaw, logsLoaded] = useFirebase("logs", {});
+  const [locationsRaw, locationsLoaded] = useFirebase("locations", {}); // v13.7
   const [session, setSession] = useState(() => getSession());
 
   const members = useMemo(() => membersRaw ? Object.values(membersRaw) : [], [membersRaw]);
   const programs = useMemo(() => programsRaw ? Object.values(programsRaw) : [], [programsRaw]);
   const logs = useMemo(() => logsRaw ? Object.values(logsRaw) : [], [logsRaw]);
-  const loaded = membersLoaded && programsLoaded && logsLoaded;
+  const locations = useMemo(() => locationsRaw ? Object.values(locationsRaw) : [], [locationsRaw]); // v13.7
+  const loaded = membersLoaded && programsLoaded && logsLoaded && locationsLoaded;
 
   const saveMember = useCallback((m) => fbSet(`members/${m.id}`, m), []);
   const deleteMember = useCallback((id) => fbSet(`members/${id}`, null), []);
   const saveProgram = useCallback((p) => fbSet(`programs/${p.id}`, p), []);
   const deleteProgram = useCallback((id) => fbSet(`programs/${id}`, null), []);
+  const saveLocation = useCallback((l) => fbSet(`locations/${l.id}`, l), []);   // v13.7
+  const deleteLocation = useCallback((id) => fbSet(`locations/${id}`, null), []); // v13.7
   const addLog = useCallback((entry) => { const l = { ...entry, id: Date.now().toString() }; fbSet(`logs/${l.id}`, l); }, []);
 
   const handleLogin = useCallback((s) => { setSession(s); saveSession(s); }, []);
@@ -110,8 +139,9 @@ export default function App() {
     <div style={S.root}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
       {!session ? <LoginScreen members={members} onLogin={handleLogin}/> :
-       session.type === "admin" ? <AdminApp members={members} saveMember={saveMember} deleteMember={deleteMember} programs={programs} saveProgram={saveProgram} deleteProgram={deleteProgram} logs={logs} onLogout={logout}/> :
-       <MemberApp session={session} programs={programs} members={members} logs={logs} addLog={addLog} onLogout={logout}/>}
+       session.type === "admin" ? <AdminApp members={members} saveMember={saveMember} deleteMember={deleteMember} programs={programs} saveProgram={saveProgram} deleteProgram={deleteProgram}
+         locations={locations} saveLocation={saveLocation} deleteLocation={deleteLocation} logs={logs} onLogout={logout}/> :
+       <MemberApp session={session} programs={programs} locations={locations} members={members} logs={logs} addLog={addLog} onLogout={logout}/>}
     </div>
   );
 }
@@ -171,11 +201,24 @@ function LoginScreen({ members, onLogin }) {
 // ═══════════════════════════════════════
 // ADMIN APP
 // ═══════════════════════════════════════
-function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, deleteProgram, logs, onLogout }) {
+function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, deleteProgram, locations, saveLocation, deleteLocation, logs, onLogout }) {
   const [screen, setScreen] = useState("home");
   const [editMember, setEditMember] = useState(null);
   const [editProgram, setEditProgram] = useState(null);
   const [viewingMember, setViewingMember] = useState(null);
+  // v13.7 — 장소 관리 상태
+  const [newLocName, setNewLocName] = useState("");
+  const [editLocId, setEditLocId] = useState(null);
+  const [editLocName, setEditLocName] = useState("");
+  const [expGroup, setExpGroup] = useState(null); // 펼쳐진 프로그램 그룹 key
+
+  const locName = useCallback((id) => {
+    if (!id || id === NO_LOC) return "공용";
+    return locations.find((l) => l.id === id)?.name || "삭제된 장소";
+  }, [locations]);
+
+  // v13.7 — 프로그램을 (이름+수준+방식) 그룹으로 묶음. 그룹 안의 각 항목 = 장소별 변형
+  const groups = useMemo(() => groupPrograms(programs), [programs]);
 
   if (screen === "memberLogs" && viewingMember) {
     const mLogs = logs.filter((l) => l.memberId === viewingMember.id).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -183,13 +226,79 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
   }
 
   if (screen === "memberForm" && editMember) return (
-    <MemberForm member={editMember} programs={programs} onSave={(m) => { saveMember(m); setEditMember(null); setScreen("members"); }}
+    <MemberForm member={editMember} programs={programs} locations={locations} onSave={(m) => { saveMember(m); setEditMember(null); setScreen("members"); }}
       onCancel={() => { setEditMember(null); setScreen("members"); }}/>
   );
   if (screen === "programForm" && editProgram) return (
-    <ProgramForm program={editProgram} onSave={(p) => { saveProgram(p); setEditProgram(null); setScreen("programs"); }}
+    <ProgramForm program={editProgram} locations={locations} programs={programs}
+      onSave={(p) => { saveProgram(p); setEditProgram(null); setScreen("programs"); }}
       onCancel={() => { setEditProgram(null); setScreen("programs"); }}/>
   );
+
+  // ─── v13.7: 장소 관리 화면 (관리자) ───
+  if (screen === "locations") {
+    const addLoc = () => {
+      const name = newLocName.trim();
+      if (!name) return;
+      if (locations.some((l) => l.name === name)) { alert("이미 등록된 장소입니다"); return; }
+      saveLocation({ id: "loc-" + Date.now(), name, createdAt: new Date().toISOString() });
+      setNewLocName("");
+    };
+    const commitEdit = (loc) => {
+      const name = editLocName.trim();
+      if (!name) return;
+      saveLocation({ ...loc, name });
+      setEditLocId(null); setEditLocName("");
+    };
+    return (
+      <div style={S.container}>
+        <BackBtn onClick={() => setScreen("home")}/>
+        <h2 style={S.pageTitle}>운동 장소 관리</h2>
+        <p style={{ fontSize: 12, color: "#666", margin: "0 0 16px" }}>장소를 등록하면, 프로그램을 장소별로 다르게 만들 수 있습니다.</p>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          <input style={{ ...S.input, flex: 1 }} placeholder="새 장소 (예: 에이블짐 강남점)" value={newLocName}
+            onChange={(e) => setNewLocName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addLoc()}/>
+          <button style={{ ...S.addBtn, flexShrink: 0 }} onClick={addLoc}><I.Plus/> 추가</button>
+        </div>
+
+        {locations.length === 0 ? <Empty icon="📍" text="등록된 장소가 없습니다" sub="장소를 추가해보세요"/> :
+          locations.map((loc) => {
+            const cnt = programs.filter((p) => p.locationId === loc.id).length;
+            return (
+              <div key={loc.id} style={S.pCard}>
+                {editLocId === loc.id ? (
+                  <>
+                    <input style={{ ...S.input, flex: 1, marginRight: 8 }} value={editLocName} autoFocus
+                      onChange={(e) => setEditLocName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && commitEdit(loc)}/>
+                    <button style={{ ...S.iconBtn, color: "#22c55e" }} onClick={() => commitEdit(loc)}><I.Check/></button>
+                    <button style={S.iconBtn} onClick={() => setEditLocId(null)}>✕</button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10 }}>
+                      <I.MapPin size={16}/>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 600 }}>{loc.name}</div>
+                        <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>프로그램 {cnt}개</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button style={S.iconBtn} onClick={() => { setEditLocId(loc.id); setEditLocName(loc.name); }}><I.Edit/></button>
+                      <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => {
+                        if (cnt > 0) { alert(`이 장소를 사용하는 프로그램이 ${cnt}개 있습니다.\n먼저 해당 프로그램을 삭제하거나 다른 장소로 변경하세요.`); return; }
+                        if (confirm(`"${loc.name}" 장소를 삭제할까요?`)) deleteLocation(loc.id);
+                      }}><I.Trash/></button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+      </div>
+    );
+  }
+
   if (screen === "members") return (
     <div style={S.container}>
       <BackBtn onClick={() => setScreen("home")}/>
@@ -222,53 +331,98 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
         })}
     </div>
   );
-  if (screen === "programs") return (
-    <div style={S.container}>
-      <BackBtn onClick={() => setScreen("home")}/>
-      <div style={S.pageHead}><h2 style={S.pageTitle}>프로그램 관리</h2>
-        <button style={S.addBtn} onClick={() => {
-          setEditProgram({ id: "p-" + Date.now(), level: "beginner", name: "", description: "", daysPerWeek: 3,
-            days: [{ dayName: "Day 1", exercises: [{ name: "", sets: 3, reps: "10", weight: "", note: "" }] }] });
-          setScreen("programForm");
-        }}><I.Plus/> 추가</button></div>
-      {programs.length === 0 ? <Empty icon="📋" text="프로그램이 없습니다" sub="프로그램을 만들어보세요"/> :
-        Object.entries(LEVELS).map(([key]) => {
-          const filtered = programs.filter((p) => p.level === key);
-          if (!filtered.length) return null;
-          return (
-            <div key={key} style={{ marginBottom: 20 }}>
-              <div style={S.lvlHead}><span style={{ ...S.badge, background: LEVELS[key].bg, color: LEVELS[key].color }}>{LEVELS[key].label}</span><span style={{ color: "#555", fontSize: 12 }}>{filtered.length}개</span></div>
-              {filtered.map((prog) => {
-                const assigned = members.filter((m) => m.programId === prog.id);
-                return (
-                  <div key={prog.id} style={S.pCard}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600 }}>{prog.name || "이름 없음"}</div>
-                      <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{prog.description}</div>
-                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                        <span style={S.chip}>주 {prog.daysPerWeek}일</span>
-                        <span style={S.chip}>{prog.days.length}개 루틴</span>
-                        <span style={S.chip}><I.User size={11}/> {assigned.length}명</span>
+  // ─── v13.7: 프로그램 관리 — 프로그램 그룹 단위, 그룹 안에 장소별 변형 ───
+  if (screen === "programs") {
+    const blankProgram = (base) => ({
+      id: "p-" + Date.now(),
+      level: base?.level || "beginner",
+      type: base?.type || "split",
+      locationId: base?.locationId || NO_LOC,
+      name: base?.name || "",
+      description: base?.description || "",
+      daysPerWeek: base?.daysPerWeek || 3,
+      days: base?.days ? JSON.parse(JSON.stringify(base.days))
+        : [{ dayName: "Day 1", exercises: [{ name: "", sets: 3, reps: "10", weight: "", note: "" }] }],
+    });
+    return (
+      <div style={S.container}>
+        <BackBtn onClick={() => setScreen("home")}/>
+        <div style={S.pageHead}><h2 style={S.pageTitle}>프로그램 관리</h2>
+          <button style={S.addBtn} onClick={() => { setEditProgram(blankProgram()); setScreen("programForm"); }}><I.Plus/> 추가</button></div>
+        <p style={{ fontSize: 12, color: "#666", margin: "0 0 16px" }}>
+          같은 이름·수준·방식의 프로그램은 하나로 묶이고, 그 안에서 장소별 버전을 만들 수 있습니다.
+        </p>
+
+        {programs.length === 0 ? <Empty icon="📋" text="프로그램이 없습니다" sub="프로그램을 만들어보세요"/> :
+          Object.entries(LEVELS).map(([lvl]) => {
+            const lvlGroups = groups.filter((g) => g.level === lvl);
+            if (!lvlGroups.length) return null;
+            return (
+              <div key={lvl} style={{ marginBottom: 20 }}>
+                <div style={S.lvlHead}>
+                  <span style={{ ...S.badge, background: LEVELS[lvl].bg, color: LEVELS[lvl].color }}>{LEVELS[lvl].label}</span>
+                  <span style={{ color: "#555", fontSize: 12 }}>{lvlGroups.length}개</span>
+                </div>
+                {lvlGroups.map((g) => {
+                  const open = expGroup === g.key;
+                  const tp = TYPES[g.type] || TYPES.split;
+                  return (
+                    <div key={g.key} style={{ ...S.pCard, flexDirection: "column", alignItems: "stretch", gap: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setExpGroup(open ? null : g.key)}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 15, fontWeight: 600 }}>{g.name || "이름 없음"}</div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                            <span style={{ ...S.badge, background: tp.bg, color: tp.color }}>{tp.label}</span>
+                            <span style={S.chip}><I.MapPin size={11}/> 장소 {g.variants.length}개</span>
+                            <span style={S.chip}><I.User size={11}/> {members.filter((m) => g.variants.some((v) => v.id === m.programId)).length}명</span>
+                          </div>
+                        </div>
+                        <span style={{ color: "#555", fontSize: 16, transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "none" }}>▾</span>
                       </div>
+
+                      {open && (
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          {g.variants.map((prog) => {
+                            const assigned = members.filter((m) => m.programId === prog.id);
+                            const isShared = !prog.locationId || prog.locationId === NO_LOC;
+                            return (
+                              <div key={prog.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, marginBottom: 6 }}>
+                                <I.MapPin size={14}/>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: isShared ? "#888" : "#e8e8e8" }}>{locName(prog.locationId)}</div>
+                                  <div style={{ fontSize: 11, color: "#555", marginTop: 3 }}>
+                                    루틴 {prog.days.length}개 · 주 {prog.daysPerWeek}일 · 배정 {assigned.length}명
+                                  </div>
+                                </div>
+                                <button style={S.iconBtn} onClick={() => { setEditProgram(JSON.parse(JSON.stringify(prog))); setScreen("programForm"); }}><I.Edit size={14}/></button>
+                                <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => { if (confirm(`"${locName(prog.locationId)}" 버전을 삭제하시겠습니까?`)) deleteProgram(prog.id); }}><I.Trash size={14}/></button>
+                              </div>
+                            );
+                          })}
+                          <button style={{ ...S.addExBtn, marginTop: 4 }} onClick={() => {
+                            const base = g.variants[0];
+                            setEditProgram({ ...blankProgram(base), locationId: "" }); // 장소 미선택 상태로 시작
+                            setScreen("programForm");
+                          }}><I.Plus size={14}/> 이 프로그램의 다른 장소 버전 추가</button>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button style={S.iconBtn} onClick={() => { setEditProgram(JSON.parse(JSON.stringify(prog))); setScreen("programForm"); }}><I.Edit/></button>
-                      <button style={{ ...S.iconBtn, color: "#ef4444" }} onClick={() => { if (confirm("삭제하시겠습니까?")) deleteProgram(prog.id); }}><I.Trash/></button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
-    </div>
-  );
+                  );
+                })}
+              </div>
+            );
+          })}
+      </div>
+    );
+  }
+
   return (
     <div style={S.container}>
       <Header title="관리자" subtitle="IF Admin" onLogout={onLogout}/>
       <div style={S.adminGrid}>
         <button style={S.adminCard} onClick={() => setScreen("members")}><I.Users size={28} style={{ color: "#6a9fd8" }}/><div style={S.adminCardT}>회원 관리</div><div style={S.adminCardN}>{members.length}명</div></button>
-        <button style={S.adminCard} onClick={() => setScreen("programs")}><I.Clipboard size={28} style={{ color: "#22c55e" }}/><div style={S.adminCardT}>프로그램</div><div style={S.adminCardN}>{programs.length}개</div></button>
+        <button style={S.adminCard} onClick={() => setScreen("programs")}><I.Clipboard size={28} style={{ color: "#22c55e" }}/><div style={S.adminCardT}>프로그램</div><div style={S.adminCardN}>{groups.length}개</div></button>
+        <button style={S.adminCard} onClick={() => setScreen("locations")}><I.MapPin size={28} style={{ color: "#a78bfa" }}/><div style={S.adminCardT}>운동 장소</div><div style={S.adminCardN}>{locations.length}곳</div></button>
       </div>
     </div>
   );
@@ -323,7 +477,8 @@ function AdminMemberLogs({ member, logs, onBack }) {
 }
 
 // ─── Member Form (회원별 세트마다 중량/횟수 커스텀 설정) ───
-function MemberForm({ member, programs, onSave, onCancel }) {
+function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
+  const locLabel = (id) => (!id || id === NO_LOC) ? "공용" : (locations.find((l) => l.id === id)?.name || "?");
   const [m, setM] = useState(() => {
     // Migrate flat customExercises to per-program structure if needed
     const raw = { ...member, customExercises: member.customExercises || {} };
@@ -414,8 +569,16 @@ function MemberForm({ member, programs, onSave, onCancel }) {
       <div style={S.fg}><label style={S.label}>배정 프로그램</label>
         <select style={S.input} value={m.programId} onChange={(e) => handleProgramChange(e.target.value)}>
           <option value="">— 선택 —</option>
-          {programs.map((p) => <option key={p.id} value={p.id}>[{LEVELS[p.level]?.label}] {p.name}</option>)}
-        </select></div>
+          {programs.map((p) => (
+            <option key={p.id} value={p.id}>
+              [{LEVELS[p.level]?.label}·{TYPES[p.type || "split"]?.label}] {p.name} — {locLabel(p.locationId)}
+            </option>
+          ))}
+        </select>
+        <div style={{ fontSize: 11, color: "#666", marginTop: 6 }}>
+          회원은 운동 시작 시 장소를 고르면, 그 장소용 버전이 자동으로 적용됩니다.
+        </div>
+      </div>
 
       {selectedProg && (
         <>
@@ -474,8 +637,13 @@ function MemberForm({ member, programs, onSave, onCancel }) {
 }
 
 // ─── Program Form (운동: 이름, 세트, 횟수, 중량 — 휴식 제거) ───
-function ProgramForm({ program, onSave, onCancel }) {
-  const [p, setP] = useState(JSON.parse(JSON.stringify(program)));
+function ProgramForm({ program, locations = [], programs = [], onSave, onCancel }) {
+  const [p, setP] = useState(() => {
+    const base = JSON.parse(JSON.stringify(program));
+    if (!base.type) base.type = "split";                                    // v13.7 마이그레이션
+    if (base.locationId === undefined || base.locationId === null) base.locationId = NO_LOC;
+    return base;
+  });
   const u = (f, v) => setP((prev) => ({ ...prev, [f]: v }));
   const uDay = (di, f, v) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], [f]: v }; return { ...prev, days: d }; });
   const uEx = (di, ei, f, v) => setP((prev) => { const d = [...prev.days]; const e = [...d[di].exercises]; e[ei] = { ...e[ei], [f]: f === "sets" ? (parseInt(v)||0) : v }; d[di] = { ...d[di], exercises: e }; return { ...prev, days: d }; });
@@ -496,9 +664,28 @@ function ProgramForm({ program, onSave, onCancel }) {
           <select style={S.input} value={p.level} onChange={(e) => u("level", e.target.value)}>
             <option value="beginner">초급</option><option value="intermediate">중급</option><option value="advanced">고급</option>
           </select></div>
-        <div style={{ ...S.fg, flex: 1 }}><label style={S.label}>주간 횟수</label>
-          <input style={S.input} type="number" inputMode="numeric" value={p.daysPerWeek} onChange={(e) => u("daysPerWeek", parseInt(e.target.value)||0)}/></div>
+        <div style={{ ...S.fg, flex: 1 }}><label style={S.label}>방식</label>
+          <select style={S.input} value={p.type} onChange={(e) => u("type", e.target.value)}>
+            <option value="split">분할 (Split)</option><option value="circuit">서킷 (Circuit)</option>
+          </select></div>
       </div>
+
+      {/* v13.7 — 운동 장소 */}
+      <div style={S.fg}>
+        <label style={S.label}>운동 장소 *</label>
+        <select style={S.input} value={p.locationId} onChange={(e) => u("locationId", e.target.value)}>
+          <option value="">— 장소 선택 —</option>
+          <option value={NO_LOC}>공용 (모든 장소)</option>
+          {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+        </select>
+        <div style={{ fontSize: 11, color: "#666", marginTop: 6, lineHeight: 1.5 }}>
+          같은 <b style={{ color: "#888" }}>이름·수준·방식</b>으로 장소만 다르게 저장하면, 같은 프로그램의 장소별 버전이 됩니다.
+          {locations.length === 0 && <span style={{ color: "#f59e0b" }}><br/>· 등록된 장소가 없습니다 — 관리자 홈 &gt; 운동 장소에서 먼저 추가하세요.</span>}
+        </div>
+      </div>
+
+      <div style={{ ...S.fg }}><label style={S.label}>주간 횟수</label>
+        <input style={S.input} type="number" inputMode="numeric" value={p.daysPerWeek} onChange={(e) => u("daysPerWeek", parseInt(e.target.value)||0)}/></div>
       <div style={S.divider}/>
       {p.days.map((day, di) => (
         <div key={di} style={S.dayEd}>
@@ -524,7 +711,14 @@ function ProgramForm({ program, onSave, onCancel }) {
       </div>
       <div style={S.formAct}>
         <button style={S.cancelBtn} onClick={onCancel}>취소</button>
-        <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={() => { if (!p.name.trim()) { alert("이름을 입력하세요"); return; } onSave(p); }}>저장</button>
+        <button style={{ ...S.primaryBtn, marginTop: 0 }} onClick={() => {
+          if (!p.name.trim()) { alert("이름을 입력하세요"); return; }
+          if (!p.locationId) { alert("운동 장소를 선택하세요"); return; }
+          // v13.7 — 같은 그룹 + 같은 장소 중복 방지
+          const dup = programs.find((x) => x.id !== p.id && groupKey(x) === groupKey(p) && (x.locationId || NO_LOC) === p.locationId);
+          if (dup) { alert("같은 프로그램의 해당 장소 버전이 이미 존재합니다.\n기존 버전을 수정하거나 다른 장소를 선택하세요."); return; }
+          onSave(p);
+        }}>저장</button>
       </div>
     </div>
   );
@@ -533,59 +727,60 @@ function ProgramForm({ program, onSave, onCancel }) {
 // ═══════════════════════════════════════
 // MEMBER APP
 // ═══════════════════════════════════════
-function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
+function MemberApp({ session, programs, locations = [], members, logs, addLog, onLogout }) {
   const [screen, setScreen] = useState("home");
   const [selDay, setSelDay] = useState(null);
-  const [activeProgId, setActiveProgId] = useState(null); // null = use assigned program
   const [showProgPicker, setShowProgPicker] = useState(false);
-  // Gym location management
-  const [gyms, setGyms] = useState(() => getGyms(session.memberId));
-  const [selGym, setSelGym] = useState(() => getLastGym(session.memberId));
-  const [showGymPicker, setShowGymPicker] = useState(false); // modal before workout start
-  const [showGymManager, setShowGymManager] = useState(false); // manage gym list
-  const [newGymName, setNewGymName] = useState("");
-  const [editGymIdx, setEditGymIdx] = useState(null);
-  const [editGymName, setEditGymName] = useState("");
-  const [pendingDay, setPendingDay] = useState(null); // day index waiting for gym pick
+  // v13.7 — 프로그램 그룹 + 장소 선택 상태
+  const [activeGroupKey, setActiveGroupKey] = useState(null);      // null = 배정된 프로그램 그룹 사용
+  const [selLocId, setSelLocId] = useState(() => getLastGym(session.memberId)); // 마지막 선택 장소 id
+  const [showLocPicker, setShowLocPicker] = useState(false);       // 운동 시작 전 장소 선택 모달
+  const [pendingDay, setPendingDay] = useState(null);              // 장소 선택 대기 중인 day index
 
   const member = members.find((m) => m.id === session.memberId);
-  const assignedProgram = programs.find((p) => p.id === member?.programId);
-  const activeProgram = activeProgId ? programs.find((p) => p.id === activeProgId) : assignedProgram;
-  const isUsingOther = activeProgId && activeProgId !== member?.programId;
   const myLogs = useMemo(() => logs.filter((l) => l.memberId === session.memberId).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [logs, session.memberId]);
 
-  // Gym CRUD
-  const addGym = () => {
-    const name = newGymName.trim();
-    if (!name || gyms.includes(name)) return;
-    const updated = [...gyms, name];
-    setGyms(updated); saveGyms(session.memberId, updated); setNewGymName("");
-  };
-  const removeGym = (idx) => {
-    const updated = gyms.filter((_, i) => i !== idx);
-    setGyms(updated); saveGyms(session.memberId, updated);
-    if (selGym === gyms[idx]) { setSelGym(""); saveLastGym(session.memberId, ""); }
-  };
-  const updateGym = (idx) => {
-    const name = editGymName.trim();
-    if (!name) return;
-    const oldName = gyms[idx];
-    const updated = [...gyms]; updated[idx] = name;
-    setGyms(updated); saveGyms(session.memberId, updated);
-    if (selGym === oldName) { setSelGym(name); saveLastGym(session.memberId, name); }
-    setEditGymIdx(null); setEditGymName("");
-  };
+  const locName = useCallback((id) => {
+    if (!id || id === NO_LOC) return "공용";
+    return locations.find((l) => l.id === id)?.name || "장소";
+  }, [locations]);
+
+  // v13.7 — 전체 프로그램을 그룹으로 묶음
+  const groups = useMemo(() => groupPrograms(programs), [programs]);
+  const assignedProgram = programs.find((p) => p.id === member?.programId);
+  const assignedGroupKey = assignedProgram ? groupKey(assignedProgram) : null;
+
+  // 현재 선택된 프로그램 그룹 (자유 선택 > 배정)
+  const activeGroup = useMemo(() => {
+    const k = activeGroupKey || assignedGroupKey;
+    return k ? groups.find((g) => g.key === k) || null : null;
+  }, [groups, activeGroupKey, assignedGroupKey]);
+  const isUsingOther = !!activeGroupKey && activeGroupKey !== assignedGroupKey;
+
+  // v13.7 — 선택된 장소에 해당하는 프로그램 변형 (없으면 공용으로 폴백)
+  const activeProgram = useMemo(() => pickVariant(activeGroup?.variants, selLocId), [activeGroup, selLocId]);
+
+  // 이 그룹에서 실제로 선택 가능한 장소 목록
+  const availableLocs = useMemo(() => {
+    if (!activeGroup) return [];
+    return activeGroup.variants.map((v) => v.locationId || NO_LOC);
+  }, [activeGroup]);
+
   const handleDayClick = (dayIdx) => {
-    if (gyms.length > 0) {
+    // 장소 버전이 2개 이상이면 반드시 장소를 먼저 고르게 함
+    if (availableLocs.length > 1) {
       setPendingDay(dayIdx);
-      setShowGymPicker(true);
+      setShowLocPicker(true);
     } else {
+      // 버전이 하나뿐이면 그대로 시작
+      const only = availableLocs[0];
+      if (only && only !== selLocId) { setSelLocId(only); saveLastGym(session.memberId, only); }
       setSelDay(dayIdx); setScreen("workout");
     }
   };
-  const confirmGymAndStart = (gymName) => {
-    setSelGym(gymName); saveLastGym(session.memberId, gymName);
-    setShowGymPicker(false);
+  const confirmLocAndStart = (locId) => {
+    setSelLocId(locId); saveLastGym(session.memberId, locId);
+    setShowLocPicker(false);
     setSelDay(pendingDay); setScreen("workout"); setPendingDay(null);
   };
 
@@ -602,7 +797,7 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   if (screen === "workout" && activeProgram && selDay !== null) return (
     <WorkoutSession program={activeProgram} dayIndex={selDay} memberId={session.memberId}
       memberCustom={!isUsingOther ? (member?.customExercises?.[activeProgram?.id] || member?.customExercises) : undefined}
-      location={selGym}
+      location={locName(activeProgram.locationId)}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
   );
@@ -613,8 +808,8 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
   const today = new Date();
   const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 
-  // Other available programs (excluding the assigned one)
-  const otherPrograms = programs.filter((p) => p.id !== member?.programId);
+  // 배정된 그룹을 제외한 다른 프로그램 그룹들
+  const otherGroups = groups.filter((g) => g.key !== assignedGroupKey);
 
   return (
     <div style={S.container}>
@@ -626,37 +821,42 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
         <button style={{ ...S.histBtn, flex: 1 }} onClick={() => setScreen("stats")}><I.Chart/><span>통계</span></button>
       </div>
 
-      {/* Gym Location Bar */}
-      <button style={{ ...S.histBtn, width: "100%", marginBottom: 12, justifyContent: "space-between" }}
-        onClick={() => setShowGymManager(true)}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <I.MapPin size={16}/>
-          <span style={{ fontWeight: 600 }}>운동 장소</span>
-          {selGym && <span style={{ fontSize: 12, color: "#6a9fd8", fontWeight: 600 }}>{selGym}</span>}
-        </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "#555" }}>{gyms.length}곳</span>
-          <span style={{ color: "#555", fontSize: 14 }}>›</span>
-        </span>
-      </button>
-
       <button style={{ ...S.histBtn, width: "100%", marginBottom: 20, background: "linear-gradient(135deg, rgba(0,229,255,0.08), rgba(124,77,255,0.08))", border: "1px solid rgba(0,229,255,0.2)" }}
         onClick={() => setScreen("aiCounter")}>
         <I.Camera/><span style={{ fontWeight: 600 }}>AI 캘리브레이션</span>
         <span style={{ marginLeft: "auto", fontSize: 11, color: "#ffab00", background: "rgba(255,171,0,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
       </button>
 
-      {/* Active Program Display */}
-      {!activeProgram ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub={otherPrograms.length > 0 ? "아래에서 다른 프로그램을 선택해보세요" : "관리자에게 문의하세요"}/> : (
+      {/* Active Program Display — v13.7: 그룹 기준, 장소별 버전 표시 */}
+      {!activeGroup ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub={otherGroups.length > 0 ? "아래에서 다른 프로그램을 선택해보세요" : "관리자에게 문의하세요"}/> :
+       !activeProgram ? <Empty icon="📍" text="이 프로그램의 장소 버전이 없습니다" sub="관리자에게 문의하세요"/> : (
         <div style={S.myProg}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-            <span style={{ ...S.badge, background: LEVELS[activeProgram.level]?.bg, color: LEVELS[activeProgram.level]?.color }}>{LEVELS[activeProgram.level]?.label}</span>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ ...S.badge, background: LEVELS[activeGroup.level]?.bg, color: LEVELS[activeGroup.level]?.color }}>{LEVELS[activeGroup.level]?.label}</span>
+            <span style={{ ...S.badge, background: TYPES[activeGroup.type]?.bg, color: TYPES[activeGroup.type]?.color }}>{TYPES[activeGroup.type]?.label}</span>
             <span style={S.chip}>주 {activeProgram.daysPerWeek}일</span>
             {isUsingOther && <span style={{ fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.1)", padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>자유 선택</span>}
-            {isUsingOther && <button style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 11, color: "#6a9fd8", cursor: "pointer", padding: "2px 6px", fontFamily: "'Noto Sans KR', sans-serif", textDecoration: "underline" }} onClick={() => setActiveProgId(null)}>내 프로그램</button>}
+            {isUsingOther && <button style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 11, color: "#6a9fd8", cursor: "pointer", padding: "2px 6px", fontFamily: "'Noto Sans KR', sans-serif", textDecoration: "underline" }} onClick={() => setActiveGroupKey(null)}>내 프로그램</button>}
           </div>
-          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{activeProgram.name}</h3>
-          <p style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>{activeProgram.description}</p>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{activeGroup.name}</h3>
+          <p style={{ fontSize: 13, color: "#888", marginBottom: 12 }}>{activeProgram.description}</p>
+
+          {/* v13.7 — 장소 선택 바 (관리자가 만든 장소 버전 중에서만 선택) */}
+          <button style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 14px", marginBottom: 16,
+            background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 12, cursor: availableLocs.length > 1 ? "pointer" : "default",
+            fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+            onClick={() => { if (availableLocs.length > 1) { setPendingDay(null); setShowLocPicker(true); } }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <I.MapPin size={16}/>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{locName(activeProgram.locationId)}</span>
+              {(!activeProgram.locationId || activeProgram.locationId === NO_LOC) && availableLocs.length > 1 &&
+                <span style={{ fontSize: 10, color: "#666" }}>모든 장소 공용</span>}
+            </span>
+            {availableLocs.length > 1
+              ? <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600 }}>변경 ({availableLocs.length}곳) ›</span>
+              : <span style={{ fontSize: 11, color: "#555" }}>장소 1곳</span>}
+          </button>
+
           <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
           <div style={S.dayGrid}>
             {activeProgram.days.map((day, i) => {
@@ -677,33 +877,38 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
         </div>
       )}
 
-      {/* Other Programs Section */}
-      {otherPrograms.length > 0 && (
+      {/* Other Programs Section — v13.7: 그룹 단위 (장소는 시작할 때 고름) */}
+      {otherGroups.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <button style={{ width: "100%", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }} onClick={() => setShowProgPicker(!showProgPicker)}>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <I.Clipboard/><span style={{ fontSize: 14, fontWeight: 600 }}>다른 프로그램</span>
-              <span style={{ fontSize: 12, color: "#555" }}>{otherPrograms.length}개</span>
+              <span style={{ fontSize: 12, color: "#555" }}>{otherGroups.length}개</span>
             </span>
             <span style={{ color: "#555", fontSize: 16, transition: "transform 0.2s", transform: showProgPicker ? "rotate(180deg)" : "none" }}>▾</span>
           </button>
           {showProgPicker && (
             <div style={{ marginTop: 8 }}>
-              {otherPrograms.map((p) => (
-                <button key={p.id} style={{ width: "100%", background: activeProgId === p.id ? "rgba(106,159,216,0.08)" : "rgba(255,255,255,0.02)", border: `1px solid ${activeProgId === p.id ? "rgba(106,159,216,0.25)" : "rgba(255,255,255,0.06)"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 6, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
-                  onClick={() => { setActiveProgId(p.id); setShowProgPicker(false); }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
-                    {p.description && <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{p.description}</div>}
-                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                      <span style={{ ...S.badge, background: LEVELS[p.level]?.bg, color: LEVELS[p.level]?.color, fontSize: 10 }}>{LEVELS[p.level]?.label}</span>
-                      <span style={{ ...S.chip, fontSize: 10 }}>{p.days.length}개 루틴</span>
-                      <span style={{ ...S.chip, fontSize: 10 }}>주 {p.daysPerWeek}일</span>
+              {otherGroups.map((g) => {
+                const sel = activeGroupKey === g.key;
+                const rep = g.variants[0];
+                return (
+                  <button key={g.key} style={{ width: "100%", background: sel ? "rgba(106,159,216,0.08)" : "rgba(255,255,255,0.02)", border: `1px solid ${sel ? "rgba(106,159,216,0.25)" : "rgba(255,255,255,0.06)"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 6, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+                    onClick={() => { setActiveGroupKey(g.key); setShowProgPicker(false); }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{g.name}</div>
+                      {g.description && <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{g.description}</div>}
+                      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                        <span style={{ ...S.badge, background: LEVELS[g.level]?.bg, color: LEVELS[g.level]?.color, fontSize: 10 }}>{LEVELS[g.level]?.label}</span>
+                        <span style={{ ...S.badge, background: TYPES[g.type]?.bg, color: TYPES[g.type]?.color, fontSize: 10 }}>{TYPES[g.type]?.label}</span>
+                        <span style={{ ...S.chip, fontSize: 10 }}>{rep?.days?.length || 0}개 루틴</span>
+                        <span style={{ ...S.chip, fontSize: 10 }}><I.MapPin size={10}/> 장소 {g.variants.length}곳</span>
+                      </div>
                     </div>
-                  </div>
-                  <span style={{ color: "#6a9fd8", fontSize: 13, flexShrink: 0 }}>선택 →</span>
-                </button>
-              ))}
+                    <span style={{ color: "#6a9fd8", fontSize: 13, flexShrink: 0 }}>선택 →</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -712,69 +917,32 @@ function MemberApp({ session, programs, members, logs, addLog, onLogout }) {
       {/* Version */}
       <div style={{ textAlign: "center", marginTop: 32, fontSize: 11, color: "#333", fontFamily: "'JetBrains Mono', monospace" }}>{APP_VERSION}</div>
 
-      {/* Gym Picker Modal — shown before starting a workout */}
-      {showGymPicker && (
-        <div style={S.modalOverlay} onClick={() => { setShowGymPicker(false); setPendingDay(null); }}>
-          <div style={S.modalBox} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>운동 장소 선택</h3>
-            <p style={{ fontSize: 12, color: "#666", margin: "0 0 16px" }}>오늘 운동할 장소를 선택하세요</p>
-            {gyms.map((g, i) => (
-              <button key={i} style={{ width: "100%", padding: "14px 16px", background: g === selGym ? "rgba(106,159,216,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${g === selGym ? "rgba(106,159,216,0.3)" : "rgba(255,255,255,0.08)"}`, borderRadius: 12, marginBottom: 8, display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
-                onClick={() => confirmGymAndStart(g)}>
-                <I.MapPin size={16} /><span style={{ fontSize: 14, fontWeight: 600 }}>{g}</span>
-                {g === selGym && <span style={{ marginLeft: "auto", fontSize: 11, color: "#6a9fd8", fontWeight: 600 }}>최근</span>}
-              </button>
-            ))}
-            <button style={{ width: "100%", padding: "12px", background: "none", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, color: "#888", fontSize: 13, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", marginTop: 4 }}
-              onClick={() => confirmGymAndStart("")}>장소 없이 시작</button>
-          </div>
-        </div>
-      )}
-
-      {/* Gym Manager Modal */}
-      {showGymManager && (
-        <div style={S.modalOverlay} onClick={() => setShowGymManager(false)}>
+      {/* v13.7 — 장소 선택 모달: 관리자가 만들어 둔 장소 버전 중에서만 선택 */}
+      {showLocPicker && activeGroup && (
+        <div style={S.modalOverlay} onClick={() => { setShowLocPicker(false); setPendingDay(null); }}>
           <div style={{ ...S.modalBox, maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700, color: "#fff", margin: 0 }}>운동 장소 관리</h3>
-              <button style={{ background: "none", border: "none", color: "#888", fontSize: 18, cursor: "pointer", padding: "4px 8px" }} onClick={() => setShowGymManager(false)}>✕</button>
-            </div>
-
-            {/* Add new gym */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              <input style={{ ...S.input, flex: 1, fontSize: 13, padding: "10px 12px" }} placeholder="새 장소 이름 (예: 에이블짐 강남점)" value={newGymName}
-                onChange={(e) => setNewGymName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addGym()}/>
-              <button style={{ background: "rgba(106,159,216,0.15)", border: "1px solid rgba(106,159,216,0.3)", borderRadius: 10, padding: "10px 16px", color: "#6a9fd8", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", flexShrink: 0 }}
-                onClick={addGym}>추가</button>
-            </div>
-
-            {gyms.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "30px 0", color: "#555", fontSize: 13 }}>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>📍</div>
-                등록된 장소가 없습니다<br/><span style={{ fontSize: 12, color: "#444" }}>장소를 등록하면 운동 시작 시 선택할 수 있습니다</span>
-              </div>
-            ) : (
-              gyms.map((g, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, marginBottom: 6 }}>
-                  {editGymIdx === i ? (
-                    <>
-                      <input style={{ ...S.input, flex: 1, fontSize: 13, padding: "8px 10px" }} value={editGymName} onChange={(e) => setEditGymName(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && updateGym(i)} autoFocus/>
-                      <button style={{ background: "none", border: "none", color: "#6a9fd8", cursor: "pointer", padding: 4, fontSize: 13, fontFamily: "'Noto Sans KR'" }} onClick={() => updateGym(i)}>저장</button>
-                      <button style={{ background: "none", border: "none", color: "#888", cursor: "pointer", padding: 4, fontSize: 13, fontFamily: "'Noto Sans KR'" }} onClick={() => setEditGymIdx(null)}>취소</button>
-                    </>
-                  ) : (
-                    <>
-                      <I.MapPin size={14}/>
-                      <span style={{ flex: 1, fontSize: 14, fontWeight: 500, color: "#e8e8e8" }}>{g}</span>
-                      {g === selGym && <span style={{ fontSize: 10, color: "#6a9fd8", background: "rgba(106,159,216,0.1)", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>최근</span>}
-                      <button style={S.iconBtn} onClick={() => { setEditGymIdx(i); setEditGymName(g); }}><I.Edit size={14}/></button>
-                      <button style={S.iconBtn} onClick={() => { if (confirm(`"${g}" 장소를 삭제할까요?`)) removeGym(i); }}><I.Trash size={14}/></button>
-                    </>
-                  )}
-                </div>
-              ))
-            )}
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>운동 장소 선택</h3>
+            <p style={{ fontSize: 12, color: "#666", margin: "0 0 16px" }}>
+              <b style={{ color: "#888" }}>{activeGroup.name}</b> — 장소를 선택하면 그 장소에 맞게 짜인 프로그램이 적용됩니다.
+            </p>
+            {activeGroup.variants.map((v) => {
+              const lid = v.locationId || NO_LOC;
+              const isSel = lid === (selLocId || NO_LOC);
+              const isShared = lid === NO_LOC;
+              return (
+                <button key={v.id} style={{ width: "100%", padding: "14px 16px", background: isSel ? "rgba(167,139,250,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${isSel ? "rgba(167,139,250,0.35)" : "rgba(255,255,255,0.08)"}`, borderRadius: 12, marginBottom: 8, display: "flex", alignItems: "center", gap: 10, cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+                  onClick={() => confirmLocAndStart(lid)}>
+                  <I.MapPin size={16}/>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: isShared ? "#aaa" : "#e8e8e8" }}>{locName(lid)}</div>
+                    <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>
+                      루틴 {v.days.length}개 · 주 {v.daysPerWeek}일 · {v.days.reduce((s, d) => s + d.exercises.length, 0)}종목
+                    </div>
+                  </div>
+                  {isSel && <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600, flexShrink: 0 }}>최근</span>}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
