@@ -16,7 +16,19 @@ const firebaseConfig = {
 };
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-function fbSet(path, val) { return set(ref(db, `if-fitness/${path}`), val); }
+function fbSet(path, val) { return set(ref(db, `if-fitness/${path}`), stripUndefined(val)); }
+
+// v13.8.1 — Firebase Realtime DB는 undefined 값이 하나라도 있으면 쓰기 전체가 실패한다.
+// 저장 직전에 undefined 를 제거한다.
+function stripUndefined(v) {
+  if (Array.isArray(v)) return v.filter((x) => x !== undefined).map(stripUndefined);
+  if (v && typeof v === "object") {
+    const out = {};
+    Object.entries(v).forEach(([k, val]) => { if (val !== undefined) out[k] = stripUndefined(val); });
+    return out;
+  }
+  return v;
+}
 
 function useFirebase(path, fallback = null) {
   const [data, setData] = useState(fallback);
@@ -62,7 +74,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.8";
+const APP_VERSION = "v13.8.1";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -75,14 +87,26 @@ const TYPES = {
 };
 const NO_LOC = "__none__"; // 장소 지정 없음(공용) 프로그램
 
+// v13.8.1 — Firebase Realtime DB는 배열을 객체({0:..,1:..})로 돌려줄 수 있다.
+// 어떤 형태로 오든 안전하게 배열로 정규화한다.
+function toArray(v) {
+  if (Array.isArray(v)) return v.filter((x) => x !== null && x !== undefined);
+  if (v && typeof v === "object") return Object.values(v).filter((x) => x !== null && x !== undefined);
+  return [];
+}
+
 // v13.7 — 프로그램 그룹 키: 같은 이름+수준+방식 = 같은 프로그램, 장소만 다른 변형
 function groupKey(p) { return `${(p.name || "").trim()}||${p.level || "beginner"}||${p.type || "split"}`; }
 function groupPrograms(programs) {
   const groups = {};
   (programs || []).forEach((p) => {
-    const k = groupKey(p);
-    if (!groups[k]) groups[k] = { key: k, name: p.name, level: p.level || "beginner", type: p.type || "split", description: p.description, variants: [] };
-    groups[k].variants.push(p);
+    if (!p || !p.id) return;
+    // v13.8.1 — Firebase에서 days가 객체로 오거나 비어 있어도 안전하게 처리
+    const safe = { ...p, days: toArray(p.days).map((d) => ({ ...d, exercises: toArray(d?.exercises) })) };
+    if (!safe.days.length) return; // 루틴이 없는 프로그램은 노출하지 않음
+    const k = groupKey(safe);
+    if (!groups[k]) groups[k] = { key: k, name: safe.name, level: safe.level || "beginner", type: safe.type || "split", description: safe.description, variants: [] };
+    groups[k].variants.push(safe);
   });
   return Object.values(groups);
 }
@@ -95,17 +119,37 @@ function pickVariant(variants, locationId) {
   return shared || null;
 }
 
-// v13.8 — 회원에게 배정된 프로그램 "그룹 키" 목록을 구한다.
-// 신규: member.programGroups = [groupKey, ...]  (관리자가 여러 개 배정 가능)
-// 구버전 호환: member.programId (단일 변형 id) 만 있으면 그 변형의 그룹 키로 변환
+// v13.8.1 — 회원에게 배정된 프로그램 "그룹"을 구한다.
+//
+// 저장 형식: member.programRefs = [programId, ...]  (안정적인 프로그램 id로 저장)
+//   → 이름/수준/방식을 바꿔도 배정이 깨지지 않는다.
+// 구버전 호환:
+//   v13.8  member.programGroups = [groupKey(문자열), ...]
+//   v13.7↓ member.programId     = 단일 변형 id
 function memberGroupKeys(member, programs) {
   if (!member) return [];
-  if (Array.isArray(member.programGroups) && member.programGroups.length) return member.programGroups;
-  if (member.programId) {
-    const p = (programs || []).find((x) => x.id === member.programId);
-    if (p) return [groupKey(p)];
+  const all = programs || [];
+  const keys = [];
+  const push = (k) => { if (k && !keys.includes(k)) keys.push(k); };
+
+  // 1) 신규 형식 — 프로그램 id 목록
+  toArray(member.programRefs).forEach((pid) => {
+    const p = all.find((x) => x.id === pid);
+    if (p) push(groupKey(p));
+  });
+
+  // 2) v13.8 형식 — groupKey 문자열 목록 (실제 존재하는 그룹만 인정)
+  if (!keys.length) {
+    const valid = new Set(all.map((p) => groupKey(p)));
+    toArray(member.programGroups).forEach((k) => { if (valid.has(k)) push(k); });
   }
-  return [];
+
+  // 3) 구버전 — 단일 programId
+  if (!keys.length && member.programId) {
+    const p = all.find((x) => x.id === member.programId);
+    if (p) push(groupKey(p));
+  }
+  return keys;
 }
 
 // ═══════════════════════════════════════
@@ -135,7 +179,7 @@ export default function App() {
   const locations = useMemo(() => locationsRaw ? Object.values(locationsRaw) : [], [locationsRaw]); // v13.7
   const loaded = membersLoaded && programsLoaded && logsLoaded && locationsLoaded;
 
-  const saveMember = useCallback((m) => fbSet(`members/${m.id}`, m), []);
+  const saveMember = useCallback((m) => fbSet(`members/${m.id}`, m).catch((e) => { console.error("saveMember failed", e); alert("저장 실패: " + e.message); }), []);
   const deleteMember = useCallback((id) => fbSet(`members/${id}`, null), []);
   const saveProgram = useCallback((p) => fbSet(`programs/${p.id}`, p), []);
   const deleteProgram = useCallback((id) => fbSet(`programs/${id}`, null), []);
@@ -512,21 +556,19 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
       const isFlat = keys.length > 0 && keys.every((k) => /^\d+-\d+$/.test(k));
       if (isFlat) raw.customExercises = { [raw.programId]: { ...raw.customExercises } };
     }
-    // v13.8 — 단일 programId → programGroups 배열로 마이그레이션
-    if (!Array.isArray(raw.programGroups)) {
-      raw.programGroups = memberGroupKeys(raw, programs);
-    }
     return raw;
   });
   const u = (f, v) => setM((p) => ({ ...p, [f]: v }));
 
-  const assignedKeys = m.programGroups || [];
+  // v13.8.1 — 배정 상태는 항상 resolver로 계산 (구버전 데이터도 그대로 인식)
+  const assignedKeys = useMemo(() => memberGroupKeys(m, programs), [m, programs]);
   const [openGroup, setOpenGroup] = useState(null); // 세부 설정 펼친 그룹
 
   // 그룹 배정 토글 — 배정 시 그 그룹의 모든 장소 변형에 대해 기본 세트값 생성
   const toggleGroup = (g) => {
     setM((prev) => {
-      const keys = new Set(prev.programGroups || []);
+      const curKeys = memberGroupKeys(prev, programs);
+      const keys = new Set(curKeys);
       const allCustom = { ...prev.customExercises };
       if (keys.has(g.key)) {
         keys.delete(g.key);
@@ -546,13 +588,16 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
         });
       }
       const nextKeys = [...keys];
+      // v13.8.1 — 이름이 바뀌어도 안 깨지도록 "프로그램 id"로 저장한다.
+      // 각 그룹의 대표 변형 id 하나씩 저장하면, resolver가 그 id로 그룹을 되찾는다.
+      const programRefs = nextKeys
+        .map((k) => groups.find((x) => x.key === k)?.variants[0]?.id)
+        .filter(Boolean);
       return {
         ...prev,
-        programGroups: nextKeys,
-        // 구버전 호환 필드도 함께 유지 (첫 번째 그룹의 첫 변형)
-        programId: nextKeys.length
-          ? (groups.find((x) => x.key === nextKeys[0])?.variants[0]?.id || "")
-          : "",
+        programRefs,
+        programGroups: nextKeys,                 // 구버전 호환용으로 함께 유지
+        programId: programRefs[0] || "",         // 더 구버전 호환용
         customExercises: allCustom,
       };
     });
@@ -889,9 +934,12 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
         <span style={{ marginLeft: "auto", fontSize: 11, color: "#ffab00", background: "rgba(255,171,0,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
       </button>
 
-      {/* v13.8 — 관리자가 배정한 프로그램 목록: 회원이 그중 하나를 선택 */}
+      {/* v13.8.1 — 관리자가 배정한 프로그램 목록: 회원이 그중 하나를 선택 */}
       {myGroups.length === 0 ? (
-        <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub="관리자에게 문의하세요"/>
+        <Empty icon="🏋️" text="배정된 프로그램이 없습니다"
+          sub={programs.length === 0
+            ? "등록된 프로그램이 없습니다 — 관리자에게 문의하세요"
+            : "관리자 화면에서 프로그램을 배정한 뒤 저장했는지 확인해 주세요"}/>
       ) : (
         <>
           {myGroups.length > 1 && (
@@ -923,7 +971,8 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
           )}
 
           {!activeProgram ? (
-            <Empty icon="📍" text="이 프로그램의 장소 버전이 없습니다" sub="관리자에게 문의하세요"/>
+            <Empty icon="📍" text="이 프로그램에 등록된 장소 버전이 없습니다"
+              sub="관리자 화면 > 프로그램에서 이 프로그램의 장소 버전을 추가해 주세요"/>
           ) : (
             <div style={S.myProg}>
               <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
