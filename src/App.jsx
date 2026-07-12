@@ -62,7 +62,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.7";
+const APP_VERSION = "v13.8";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -93,6 +93,19 @@ function pickVariant(variants, locationId) {
   if (exact) return exact;
   const shared = variants.find((v) => !v.locationId || v.locationId === NO_LOC);
   return shared || null;
+}
+
+// v13.8 — 회원에게 배정된 프로그램 "그룹 키" 목록을 구한다.
+// 신규: member.programGroups = [groupKey, ...]  (관리자가 여러 개 배정 가능)
+// 구버전 호환: member.programId (단일 변형 id) 만 있으면 그 변형의 그룹 키로 변환
+function memberGroupKeys(member, programs) {
+  if (!member) return [];
+  if (Array.isArray(member.programGroups) && member.programGroups.length) return member.programGroups;
+  if (member.programId) {
+    const p = (programs || []).find((x) => x.id === member.programId);
+    if (p) return [groupKey(p)];
+  }
+  return [];
 }
 
 // ═══════════════════════════════════════
@@ -303,10 +316,12 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
     <div style={S.container}>
       <BackBtn onClick={() => setScreen("home")}/>
       <div style={S.pageHead}><h2 style={S.pageTitle}>회원 관리</h2>
-        <button style={S.addBtn} onClick={() => { setEditMember({ id: "m-" + Date.now(), name: "", phone: "", pin: "1234", level: "beginner", programId: "" }); setScreen("memberForm"); }}><I.Plus/> 추가</button></div>
+        <button style={S.addBtn} onClick={() => { setEditMember({ id: "m-" + Date.now(), name: "", phone: "", pin: "1234", level: "beginner", programId: "", programGroups: [] }); setScreen("memberForm"); }}><I.Plus/> 추가</button></div>
       {members.length === 0 ? <Empty icon="👤" text="등록된 회원이 없습니다" sub="회원을 추가해보세요"/> :
         members.map((m) => {
-          const prog = programs.find((p) => p.id === m.programId);
+          // v13.8 — 배정된 프로그램 그룹들
+          const myKeys = memberGroupKeys(m, programs);
+          const myG = myKeys.map((k) => groups.find((g) => g.key === k)).filter(Boolean);
           const mLogs = logs.filter((l) => l.memberId === m.id);
           return (
             <div key={m.id} style={S.mCard}>
@@ -314,9 +329,15 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
                 <div style={{ ...S.avatarLg, background: LEVELS[m.level]?.accent, color: LEVELS[m.level]?.color }}>{m.name[0]}</div>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 600 }}>{m.name}</div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ ...S.badge, background: LEVELS[m.level]?.bg, color: LEVELS[m.level]?.color }}>{LEVELS[m.level]?.label}</span>
-                    {prog && <span style={{ fontSize: 11, color: "#888" }}>{prog.name}</span>}
+                    {myG.length === 0
+                      ? <span style={{ fontSize: 11, color: "#f59e0b" }}>프로그램 미배정</span>
+                      : myG.map((g) => (
+                          <span key={g.key} style={{ ...S.badge, background: TYPES[g.type]?.bg, color: TYPES[g.type]?.color, fontSize: 10 }}>
+                            {TYPES[g.type]?.label} · {g.name}
+                          </span>
+                        ))}
                   </div>
                   <div style={{ fontSize: 11, color: "#555", marginTop: 3 }}>운동 {mLogs.length}회</div>
                 </div>
@@ -374,7 +395,7 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
                           <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                             <span style={{ ...S.badge, background: tp.bg, color: tp.color }}>{tp.label}</span>
                             <span style={S.chip}><I.MapPin size={11}/> 장소 {g.variants.length}개</span>
-                            <span style={S.chip}><I.User size={11}/> {members.filter((m) => g.variants.some((v) => v.id === m.programId)).length}명</span>
+                            <span style={S.chip}><I.User size={11}/> {members.filter((m) => memberGroupKeys(m, programs).includes(g.key)).length}명</span>
                           </div>
                         </div>
                         <span style={{ color: "#555", fontSize: 16, transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "none" }}>▾</span>
@@ -383,7 +404,7 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
                       {open && (
                         <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
                           {g.variants.map((prog) => {
-                            const assigned = members.filter((m) => m.programId === prog.id);
+                            const assigned = members.filter((m) => memberGroupKeys(m, programs).includes(g.key));
                             const isShared = !prog.locationId || prog.locationId === NO_LOC;
                             return (
                               <div key={prog.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, marginBottom: 6 }}>
@@ -479,81 +500,84 @@ function AdminMemberLogs({ member, logs, onBack }) {
 // ─── Member Form (회원별 세트마다 중량/횟수 커스텀 설정) ───
 function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
   const locLabel = (id) => (!id || id === NO_LOC) ? "공용" : (locations.find((l) => l.id === id)?.name || "?");
+
+  // v13.8 — 프로그램 그룹 목록 (같은 이름+수준+방식 = 1개 그룹, 장소별 변형은 그 안에)
+  const groups = useMemo(() => groupPrograms(programs), [programs]);
+
   const [m, setM] = useState(() => {
-    // Migrate flat customExercises to per-program structure if needed
     const raw = { ...member, customExercises: member.customExercises || {} };
+    // 구버전 flat customExercises → 프로그램별 구조로 마이그레이션
     if (raw.programId && raw.customExercises && !raw.customExercises[raw.programId]) {
-      // Check if it's old flat format (keys like "0-0" instead of program IDs)
       const keys = Object.keys(raw.customExercises);
       const isFlat = keys.length > 0 && keys.every((k) => /^\d+-\d+$/.test(k));
-      if (isFlat) {
-        raw.customExercises = { [raw.programId]: { ...raw.customExercises } };
-      }
+      if (isFlat) raw.customExercises = { [raw.programId]: { ...raw.customExercises } };
+    }
+    // v13.8 — 단일 programId → programGroups 배열로 마이그레이션
+    if (!Array.isArray(raw.programGroups)) {
+      raw.programGroups = memberGroupKeys(raw, programs);
     }
     return raw;
   });
   const u = (f, v) => setM((p) => ({ ...p, [f]: v }));
 
-  const handleProgramChange = (progId) => {
-    const prog = programs.find((p) => p.id === progId);
-    const allCustom = { ...m.customExercises };
-    // Build or reuse custom settings for the new program
-    const progCustom = { ...(allCustom[progId] || {}) };
-    if (prog) {
-      prog.days.forEach((day, di) => {
-        day.exercises.forEach((ex, ei) => {
-          const key = `${di}-${ei}`;
-          if (!progCustom[key]?.sets) {
-            progCustom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: progCustom[key]?.weight || "", reps: progCustom[key]?.reps || ex.reps })) };
-          }
+  const assignedKeys = m.programGroups || [];
+  const [openGroup, setOpenGroup] = useState(null); // 세부 설정 펼친 그룹
+
+  // 그룹 배정 토글 — 배정 시 그 그룹의 모든 장소 변형에 대해 기본 세트값 생성
+  const toggleGroup = (g) => {
+    setM((prev) => {
+      const keys = new Set(prev.programGroups || []);
+      const allCustom = { ...prev.customExercises };
+      if (keys.has(g.key)) {
+        keys.delete(g.key);
+      } else {
+        keys.add(g.key);
+        g.variants.forEach((prog) => {
+          const progCustom = { ...(allCustom[prog.id] || {}) };
+          prog.days.forEach((day, di) => {
+            day.exercises.forEach((ex, ei) => {
+              const k = `${di}-${ei}`;
+              if (!progCustom[k]?.sets) {
+                progCustom[k] = { sets: Array.from({ length: ex.sets }, () => ({ weight: "", reps: ex.reps })) };
+              }
+            });
+          });
+          allCustom[prog.id] = progCustom;
         });
-      });
-    }
-    if (progId) allCustom[progId] = progCustom;
-    setM((p) => ({ ...p, programId: progId, customExercises: allCustom }));
+      }
+      const nextKeys = [...keys];
+      return {
+        ...prev,
+        programGroups: nextKeys,
+        // 구버전 호환 필드도 함께 유지 (첫 번째 그룹의 첫 변형)
+        programId: nextKeys.length
+          ? (groups.find((x) => x.key === nextKeys[0])?.variants[0]?.id || "")
+          : "",
+        customExercises: allCustom,
+      };
+    });
   };
 
-  const updateSetVal = (key, si, field, value) => {
-    setM((p) => {
-      const allCustom = { ...p.customExercises };
-      const progCustom = { ...(allCustom[p.programId] || {}) };
+  // 특정 프로그램 변형(progId)의 세트값 수정
+  const updateSetVal = (progId, key, si, field, value) => {
+    setM((prev) => {
+      const allCustom = { ...prev.customExercises };
+      const progCustom = { ...(allCustom[progId] || {}) };
       const entry = { ...progCustom[key], sets: [...(progCustom[key]?.sets || [])] };
       entry.sets[si] = { ...entry.sets[si], [field]: value };
       progCustom[key] = entry;
-      allCustom[p.programId] = progCustom;
-      return { ...p, customExercises: allCustom };
+      allCustom[progId] = progCustom;
+      return { ...prev, customExercises: allCustom };
     });
   };
 
-  const selectedProg = programs.find((p) => p.id === m.programId);
-
-  // 프로그램 선택되어 있으나 customExercises가 없거나 구조가 다를 때 자동 초기화
-  const ensureCustom = () => {
-    if (!selectedProg) return {};
-    const allCustom = { ...m.customExercises };
-    const progCustom = { ...(allCustom[m.programId] || {}) };
-    let changed = false;
-    selectedProg.days.forEach((day, di) => {
-      day.exercises.forEach((ex, ei) => {
-        const key = `${di}-${ei}`;
-        if (!progCustom[key]?.sets) {
-          progCustom[key] = { sets: Array.from({ length: ex.sets }, () => ({ weight: progCustom[key]?.weight || "", reps: progCustom[key]?.reps || ex.reps })) };
-          changed = true;
-        } else if (progCustom[key].sets.length !== ex.sets) {
-          const existing = progCustom[key].sets;
-          progCustom[key] = { sets: Array.from({ length: ex.sets }, (_, i) => existing[i] || { weight: "", reps: ex.reps }) };
-          changed = true;
-        }
-      });
-    });
-    if (changed) {
-      allCustom[m.programId] = progCustom;
-      setTimeout(() => setM((p) => ({ ...p, customExercises: allCustom })), 0);
-    }
-    return progCustom;
+  // 해당 변형의 세트 데이터 (없으면 프로그램 기본값으로 폴백해서 렌더)
+  const setsFor = (prog, di, ei, ex) => {
+    const cv = m.customExercises?.[prog.id]?.[`${di}-${ei}`];
+    if (cv?.sets?.length === ex.sets) return cv.sets;
+    const existing = cv?.sets || [];
+    return Array.from({ length: ex.sets }, (_, i) => existing[i] || { weight: "", reps: ex.reps });
   };
-
-  const customData = ensureCustom();
 
   return (
     <div style={S.container}>
@@ -566,67 +590,107 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
         <select style={S.input} value={m.level} onChange={(e) => u("level", e.target.value)}>
           <option value="beginner">초급</option><option value="intermediate">중급</option><option value="advanced">고급</option>
         </select></div>
-      <div style={S.fg}><label style={S.label}>배정 프로그램</label>
-        <select style={S.input} value={m.programId} onChange={(e) => handleProgramChange(e.target.value)}>
-          <option value="">— 선택 —</option>
-          {programs.map((p) => (
-            <option key={p.id} value={p.id}>
-              [{LEVELS[p.level]?.label}·{TYPES[p.type || "split"]?.label}] {p.name} — {locLabel(p.locationId)}
-            </option>
-          ))}
-        </select>
-        <div style={{ fontSize: 11, color: "#666", marginTop: 6 }}>
-          회원은 운동 시작 시 장소를 고르면, 그 장소용 버전이 자동으로 적용됩니다.
-        </div>
-      </div>
 
-      {selectedProg && (
-        <>
-          <div style={S.divider}/>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#6a9fd8", marginBottom: 12 }}>
-            {m.name || "회원"}의 운동 설정
-          </div>
-          {selectedProg.days.map((day, di) => (
-            <div key={di} style={S.customDayBlock}>
-              <div style={S.customDayTitle}>{day.dayName}</div>
-              {day.exercises.map((ex, ei) => {
-                const key = `${di}-${ei}`;
-                const cv = customData?.[key];
-                const sets = cv?.sets || Array.from({ length: ex.sets }, () => ({ weight: "", reps: ex.reps }));
-                return (
-                  <div key={ei} style={S.customExBlock}>
-                    <div style={S.customExHeader}>
-                      <span style={S.customExNum}>{ei + 1}</span>
-                      <span style={S.customExName}>{ex.name || `운동 ${ei+1}`}</span>
-                      <span style={{ fontSize: 11, color: "#555" }}>{sets.length}세트</span>
-                    </div>
-                    <div style={S.customSetGrid}>
-                      <div style={S.customSetHeaderRow}>
-                        <span style={S.customSetHCell}>세트</span>
-                        <span style={S.customSetHCellW}>중량(kg)</span>
-                        <span style={S.customSetHCellW}>횟수</span>
-                      </div>
-                      {sets.map((s, si) => (
-                        <div key={si} style={S.customSetRow}>
-                          <span style={S.customSetCell}>{si + 1}</span>
-                          <span style={S.customSetCellW}>
-                            <input style={S.customSetInput} type="number" inputMode="decimal" placeholder="kg"
-                              value={s.weight || ""} onChange={(e) => updateSetVal(key, si, "weight", e.target.value)}/>
-                          </span>
-                          <span style={S.customSetCellW}>
-                            <input style={S.customSetInput} inputMode="numeric" placeholder={ex.reps}
-                              value={s.reps || ""} onChange={(e) => updateSetVal(key, si, "reps", e.target.value)}/>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+      {/* v13.8 — 배정 프로그램: 여러 개 선택 가능 (예: 분할 + 서킷) */}
+      <div style={S.divider}/>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <label style={{ ...S.label, marginBottom: 0 }}>배정 프로그램 (복수 선택)</label>
+        <span style={{ fontSize: 11, color: assignedKeys.length ? "#22c55e" : "#f59e0b", fontWeight: 600 }}>{assignedKeys.length}개 배정</span>
+      </div>
+      <p style={{ fontSize: 11, color: "#666", margin: "0 0 12px", lineHeight: 1.5 }}>
+        배정한 프로그램이 회원 앱에 모두 표시됩니다. 회원이 그 중 하나를 고르고 장소를 선택하면,
+        해당 장소용으로 저장해 둔 프로그램이 적용됩니다.
+      </p>
+
+      {groups.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "24px 0", color: "#555", fontSize: 13 }}>
+          등록된 프로그램이 없습니다<br/>
+          <span style={{ fontSize: 12, color: "#444" }}>관리자 홈 &gt; 프로그램에서 먼저 만들어 주세요</span>
+        </div>
+      ) : groups.map((g) => {
+        const on = assignedKeys.includes(g.key);
+        const open = openGroup === g.key;
+        const tp = TYPES[g.type] || TYPES.split;
+        return (
+          <div key={g.key} style={{ background: on ? "rgba(34,197,94,0.05)" : "rgba(255,255,255,0.02)", border: `1px solid ${on ? "rgba(34,197,94,0.25)" : "rgba(255,255,255,0.06)"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button style={{ width: 22, height: 22, flexShrink: 0, borderRadius: 6, cursor: "pointer",
+                border: `2px solid ${on ? "#22c55e" : "rgba(255,255,255,0.2)"}`, background: on ? "#22c55e" : "transparent",
+                display: "flex", alignItems: "center", justifyContent: "center", color: "#04140a", padding: 0 }}
+                onClick={() => toggleGroup(g)}>
+                {on && <I.Check size={14}/>}
+              </button>
+              <div style={{ flex: 1, cursor: "pointer" }} onClick={() => toggleGroup(g)}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#e8e8e8" }}>{g.name || "이름 없음"}</div>
+                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                  <span style={{ ...S.badge, background: LEVELS[g.level]?.bg, color: LEVELS[g.level]?.color, fontSize: 10 }}>{LEVELS[g.level]?.label}</span>
+                  <span style={{ ...S.badge, background: tp.bg, color: tp.color, fontSize: 10 }}>{tp.label}</span>
+                  <span style={{ ...S.chip, fontSize: 10 }}><I.MapPin size={10}/> 장소 {g.variants.length}곳</span>
+                </div>
+              </div>
+              {on && (
+                <button style={{ background: "none", border: "none", color: "#6a9fd8", fontSize: 11, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", padding: "4px 6px", flexShrink: 0, textDecoration: "underline" }}
+                  onClick={() => setOpenGroup(open ? null : g.key)}>
+                  {open ? "설정 닫기" : "중량/횟수 설정"}
+                </button>
+              )}
             </div>
-          ))}
-        </>
-      )}
+
+            {/* 배정된 그룹의 장소별 변형마다 세트/중량/횟수 개인 설정 */}
+            {on && open && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                {g.variants.map((prog) => (
+                  <div key={prog.id} style={{ marginBottom: 16 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <I.MapPin size={13}/>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#a78bfa" }}>{locLabel(prog.locationId)}</span>
+                      <span style={{ fontSize: 11, color: "#555" }}>루틴 {prog.days.length}개</span>
+                    </div>
+                    {prog.days.map((day, di) => (
+                      <div key={di} style={S.customDayBlock}>
+                        <div style={S.customDayTitle}>{day.dayName}</div>
+                        {day.exercises.map((ex, ei) => {
+                          const key = `${di}-${ei}`;
+                          const sets = setsFor(prog, di, ei, ex);
+                          return (
+                            <div key={ei} style={S.customExBlock}>
+                              <div style={S.customExHeader}>
+                                <span style={S.customExNum}>{ei + 1}</span>
+                                <span style={S.customExName}>{ex.name || `운동 ${ei+1}`}</span>
+                                <span style={{ fontSize: 11, color: "#555" }}>{sets.length}세트</span>
+                              </div>
+                              <div style={S.customSetGrid}>
+                                <div style={S.customSetHeaderRow}>
+                                  <span style={S.customSetHCell}>세트</span>
+                                  <span style={S.customSetHCellW}>중량(kg)</span>
+                                  <span style={S.customSetHCellW}>횟수</span>
+                                </div>
+                                {sets.map((s, si) => (
+                                  <div key={si} style={S.customSetRow}>
+                                    <span style={S.customSetCell}>{si + 1}</span>
+                                    <span style={S.customSetCellW}>
+                                      <input style={S.customSetInput} type="number" inputMode="decimal" placeholder="kg"
+                                        value={s.weight || ""} onChange={(e) => updateSetVal(prog.id, key, si, "weight", e.target.value)}/>
+                                    </span>
+                                    <span style={S.customSetCellW}>
+                                      <input style={S.customSetInput} inputMode="numeric" placeholder={ex.reps}
+                                        value={s.reps || ""} onChange={(e) => updateSetVal(prog.id, key, si, "reps", e.target.value)}/>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       <div style={S.formAct}>
         <button style={S.cancelBtn} onClick={onCancel}>취소</button>
@@ -635,6 +699,7 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
     </div>
   );
 }
+
 
 // ─── Program Form (운동: 이름, 세트, 횟수, 중량 — 휴식 제거) ───
 function ProgramForm({ program, locations = [], programs = [], onSave, onCancel }) {
@@ -730,12 +795,11 @@ function ProgramForm({ program, locations = [], programs = [], onSave, onCancel 
 function MemberApp({ session, programs, locations = [], members, logs, addLog, onLogout }) {
   const [screen, setScreen] = useState("home");
   const [selDay, setSelDay] = useState(null);
-  const [showProgPicker, setShowProgPicker] = useState(false);
-  // v13.7 — 프로그램 그룹 + 장소 선택 상태
-  const [activeGroupKey, setActiveGroupKey] = useState(null);      // null = 배정된 프로그램 그룹 사용
-  const [selLocId, setSelLocId] = useState(() => getLastGym(session.memberId)); // 마지막 선택 장소 id
-  const [showLocPicker, setShowLocPicker] = useState(false);       // 운동 시작 전 장소 선택 모달
-  const [pendingDay, setPendingDay] = useState(null);              // 장소 선택 대기 중인 day index
+  // v13.8 — 배정된 여러 프로그램 중 선택 + 장소 선택
+  const [activeGroupKey, setActiveGroupKey] = useState(null);      // null = 배정 목록의 첫 번째
+  const [selLocId, setSelLocId] = useState(() => getLastGym(session.memberId));
+  const [showLocPicker, setShowLocPicker] = useState(false);
+  const [pendingDay, setPendingDay] = useState(null);
 
   const member = members.find((m) => m.id === session.memberId);
   const myLogs = useMemo(() => logs.filter((l) => l.memberId === session.memberId).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)), [logs, session.memberId]);
@@ -745,34 +809,35 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
     return locations.find((l) => l.id === id)?.name || "장소";
   }, [locations]);
 
-  // v13.7 — 전체 프로그램을 그룹으로 묶음
+  // 전체 프로그램을 그룹으로 묶음
   const groups = useMemo(() => groupPrograms(programs), [programs]);
-  const assignedProgram = programs.find((p) => p.id === member?.programId);
-  const assignedGroupKey = assignedProgram ? groupKey(assignedProgram) : null;
 
-  // 현재 선택된 프로그램 그룹 (자유 선택 > 배정)
+  // v13.8 — 관리자가 이 회원에게 배정한 프로그램 그룹들 (여러 개 가능)
+  const myGroups = useMemo(() => {
+    const keys = memberGroupKeys(member, programs);
+    return keys.map((k) => groups.find((g) => g.key === k)).filter(Boolean);
+  }, [member, programs, groups]);
+
+  // 배정 목록 중 현재 선택된 그룹 (미선택이면 첫 번째를 기본으로)
   const activeGroup = useMemo(() => {
-    const k = activeGroupKey || assignedGroupKey;
-    return k ? groups.find((g) => g.key === k) || null : null;
-  }, [groups, activeGroupKey, assignedGroupKey]);
-  const isUsingOther = !!activeGroupKey && activeGroupKey !== assignedGroupKey;
+    if (!myGroups.length) return null;
+    return myGroups.find((g) => g.key === activeGroupKey) || myGroups[0];
+  }, [myGroups, activeGroupKey]);
 
-  // v13.7 — 선택된 장소에 해당하는 프로그램 변형 (없으면 공용으로 폴백)
+  // 선택된 장소에 해당하는 프로그램 변형 (없으면 공용으로 폴백)
   const activeProgram = useMemo(() => pickVariant(activeGroup?.variants, selLocId), [activeGroup, selLocId]);
 
-  // 이 그룹에서 실제로 선택 가능한 장소 목록
+  // 이 그룹에서 선택 가능한 장소 목록
   const availableLocs = useMemo(() => {
     if (!activeGroup) return [];
     return activeGroup.variants.map((v) => v.locationId || NO_LOC);
   }, [activeGroup]);
 
   const handleDayClick = (dayIdx) => {
-    // 장소 버전이 2개 이상이면 반드시 장소를 먼저 고르게 함
     if (availableLocs.length > 1) {
       setPendingDay(dayIdx);
       setShowLocPicker(true);
     } else {
-      // 버전이 하나뿐이면 그대로 시작
       const only = availableLocs[0];
       if (only && only !== selLocId) { setSelLocId(only); saveLastGym(session.memberId, only); }
       setSelDay(dayIdx); setScreen("workout");
@@ -781,7 +846,7 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
   const confirmLocAndStart = (locId) => {
     setSelLocId(locId); saveLastGym(session.memberId, locId);
     setShowLocPicker(false);
-    setSelDay(pendingDay); setScreen("workout"); setPendingDay(null);
+    if (pendingDay !== null) { setSelDay(pendingDay); setScreen("workout"); setPendingDay(null); }
   };
 
   // Check for in-progress workout sessions (must be before conditional returns)
@@ -796,7 +861,7 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
 
   if (screen === "workout" && activeProgram && selDay !== null) return (
     <WorkoutSession program={activeProgram} dayIndex={selDay} memberId={session.memberId}
-      memberCustom={!isUsingOther ? (member?.customExercises?.[activeProgram?.id] || member?.customExercises) : undefined}
+      memberCustom={member?.customExercises?.[activeProgram.id]}
       location={locName(activeProgram.locationId)}
       onFinish={(e) => { addLog(e); setScreen("home"); setSelDay(null); }}
       onBack={() => { setScreen("home"); setSelDay(null); }}/>
@@ -807,9 +872,6 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
 
   const today = new Date();
   const todayStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
-
-  // 배정된 그룹을 제외한 다른 프로그램 그룹들
-  const otherGroups = groups.filter((g) => g.key !== assignedGroupKey);
 
   return (
     <div style={S.container}>
@@ -827,91 +889,86 @@ function MemberApp({ session, programs, locations = [], members, logs, addLog, o
         <span style={{ marginLeft: "auto", fontSize: 11, color: "#ffab00", background: "rgba(255,171,0,0.1)", padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>BETA</span>
       </button>
 
-      {/* Active Program Display — v13.7: 그룹 기준, 장소별 버전 표시 */}
-      {!activeGroup ? <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub={otherGroups.length > 0 ? "아래에서 다른 프로그램을 선택해보세요" : "관리자에게 문의하세요"}/> :
-       !activeProgram ? <Empty icon="📍" text="이 프로그램의 장소 버전이 없습니다" sub="관리자에게 문의하세요"/> : (
-        <div style={S.myProg}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ ...S.badge, background: LEVELS[activeGroup.level]?.bg, color: LEVELS[activeGroup.level]?.color }}>{LEVELS[activeGroup.level]?.label}</span>
-            <span style={{ ...S.badge, background: TYPES[activeGroup.type]?.bg, color: TYPES[activeGroup.type]?.color }}>{TYPES[activeGroup.type]?.label}</span>
-            <span style={S.chip}>주 {activeProgram.daysPerWeek}일</span>
-            {isUsingOther && <span style={{ fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.1)", padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>자유 선택</span>}
-            {isUsingOther && <button style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 11, color: "#6a9fd8", cursor: "pointer", padding: "2px 6px", fontFamily: "'Noto Sans KR', sans-serif", textDecoration: "underline" }} onClick={() => setActiveGroupKey(null)}>내 프로그램</button>}
-          </div>
-          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{activeGroup.name}</h3>
-          <p style={{ fontSize: 13, color: "#888", marginBottom: 12 }}>{activeProgram.description}</p>
-
-          {/* v13.7 — 장소 선택 바 (관리자가 만든 장소 버전 중에서만 선택) */}
-          <button style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 14px", marginBottom: 16,
-            background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 12, cursor: availableLocs.length > 1 ? "pointer" : "default",
-            fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
-            onClick={() => { if (availableLocs.length > 1) { setPendingDay(null); setShowLocPicker(true); } }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <I.MapPin size={16}/>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{locName(activeProgram.locationId)}</span>
-              {(!activeProgram.locationId || activeProgram.locationId === NO_LOC) && availableLocs.length > 1 &&
-                <span style={{ fontSize: 10, color: "#666" }}>모든 장소 공용</span>}
-            </span>
-            {availableLocs.length > 1
-              ? <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600 }}>변경 ({availableLocs.length}곳) ›</span>
-              : <span style={{ fontSize: 11, color: "#555" }}>장소 1곳</span>}
-          </button>
-
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
-          <div style={S.dayGrid}>
-            {activeProgram.days.map((day, i) => {
-              const todayDate = new Date().toDateString();
-              const done = myLogs.some((l) => l.dayName === day.dayName && l.programId === activeProgram.id && new Date(l.timestamp).toDateString() === todayDate);
-              const inProgress = hasInProgress(activeProgram, i);
-              return (
-                <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => handleDayClick(i)}>
-                  {done && <div style={S.doneChk}><I.Check size={14}/></div>}
-                  {inProgress && !done && <div style={{ position: "absolute", top: 8, right: 8, fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.15)", padding: "2px 6px", borderRadius: 6, fontWeight: 700 }}>진행중</div>}
-                  <div style={S.dayNum}>DAY {i + 1}</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{day.dayName}</div>
-                  <div style={{ fontSize: 12, color: "#666" }}>{day.exercises.length}종목</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Other Programs Section — v13.7: 그룹 단위 (장소는 시작할 때 고름) */}
-      {otherGroups.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <button style={{ width: "100%", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }} onClick={() => setShowProgPicker(!showProgPicker)}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <I.Clipboard/><span style={{ fontSize: 14, fontWeight: 600 }}>다른 프로그램</span>
-              <span style={{ fontSize: 12, color: "#555" }}>{otherGroups.length}개</span>
-            </span>
-            <span style={{ color: "#555", fontSize: 16, transition: "transform 0.2s", transform: showProgPicker ? "rotate(180deg)" : "none" }}>▾</span>
-          </button>
-          {showProgPicker && (
-            <div style={{ marginTop: 8 }}>
-              {otherGroups.map((g) => {
-                const sel = activeGroupKey === g.key;
-                const rep = g.variants[0];
-                return (
-                  <button key={g.key} style={{ width: "100%", background: sel ? "rgba(106,159,216,0.08)" : "rgba(255,255,255,0.02)", border: `1px solid ${sel ? "rgba(106,159,216,0.25)" : "rgba(255,255,255,0.06)"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 6, display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
-                    onClick={() => { setActiveGroupKey(g.key); setShowProgPicker(false); }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{g.name}</div>
-                      {g.description && <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{g.description}</div>}
-                      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                        <span style={{ ...S.badge, background: LEVELS[g.level]?.bg, color: LEVELS[g.level]?.color, fontSize: 10 }}>{LEVELS[g.level]?.label}</span>
-                        <span style={{ ...S.badge, background: TYPES[g.type]?.bg, color: TYPES[g.type]?.color, fontSize: 10 }}>{TYPES[g.type]?.label}</span>
-                        <span style={{ ...S.chip, fontSize: 10 }}>{rep?.days?.length || 0}개 루틴</span>
-                        <span style={{ ...S.chip, fontSize: 10 }}><I.MapPin size={10}/> 장소 {g.variants.length}곳</span>
+      {/* v13.8 — 관리자가 배정한 프로그램 목록: 회원이 그중 하나를 선택 */}
+      {myGroups.length === 0 ? (
+        <Empty icon="🏋️" text="배정된 프로그램이 없습니다" sub="관리자에게 문의하세요"/>
+      ) : (
+        <>
+          {myGroups.length > 1 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 8 }}>
+                내 프로그램 {myGroups.length}개 — 하나를 선택하세요
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {myGroups.map((g) => {
+                  const sel = activeGroup?.key === g.key;
+                  const tp = TYPES[g.type] || TYPES.split;
+                  return (
+                    <button key={g.key} style={{ flex: "1 1 45%", minWidth: 140, textAlign: "left", cursor: "pointer",
+                      background: sel ? tp.accent : "rgba(255,255,255,0.02)",
+                      border: `1px solid ${sel ? tp.color : "rgba(255,255,255,0.08)"}`,
+                      borderRadius: 12, padding: "12px 14px", fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+                      onClick={() => { setActiveGroupKey(g.key); setSelDay(null); }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <span style={{ ...S.badge, background: tp.bg, color: tp.color, fontSize: 10 }}>{tp.label}</span>
+                        {sel && <I.Check size={13} style={{ color: tp.color, marginLeft: "auto" }}/>}
                       </div>
-                    </div>
-                    <span style={{ color: "#6a9fd8", fontSize: 13, flexShrink: 0 }}>선택 →</span>
-                  </button>
-                );
-              })}
+                      <div style={{ fontSize: 13, fontWeight: 700, color: sel ? "#fff" : "#bbb", lineHeight: 1.35 }}>{g.name}</div>
+                      <div style={{ fontSize: 10, color: "#666", marginTop: 4 }}>장소 {g.variants.length}곳</div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
-        </div>
+
+          {!activeProgram ? (
+            <Empty icon="📍" text="이 프로그램의 장소 버전이 없습니다" sub="관리자에게 문의하세요"/>
+          ) : (
+            <div style={S.myProg}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ ...S.badge, background: LEVELS[activeGroup.level]?.bg, color: LEVELS[activeGroup.level]?.color }}>{LEVELS[activeGroup.level]?.label}</span>
+                <span style={{ ...S.badge, background: TYPES[activeGroup.type]?.bg, color: TYPES[activeGroup.type]?.color }}>{TYPES[activeGroup.type]?.label}</span>
+                <span style={S.chip}>주 {activeProgram.daysPerWeek}일</span>
+              </div>
+              <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 4px" }}>{activeGroup.name}</h3>
+              <p style={{ fontSize: 13, color: "#888", marginBottom: 12 }}>{activeProgram.description}</p>
+
+              {/* 장소 선택 바 — 관리자가 저장해 둔 장소 버전 중에서만 선택 */}
+              <button style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "12px 14px", marginBottom: 16,
+                background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 12,
+                cursor: availableLocs.length > 1 ? "pointer" : "default",
+                fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8" }}
+                onClick={() => { if (availableLocs.length > 1) { setPendingDay(null); setShowLocPicker(true); } }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <I.MapPin size={16}/>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{locName(activeProgram.locationId)}</span>
+                </span>
+                {availableLocs.length > 1
+                  ? <span style={{ fontSize: 11, color: "#a78bfa", fontWeight: 600 }}>장소 변경 ({availableLocs.length}곳) ›</span>
+                  : <span style={{ fontSize: 11, color: "#555" }}>장소 1곳</span>}
+              </button>
+
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#555", letterSpacing: "0.08em", marginBottom: 10 }}>루틴 선택</div>
+              <div style={S.dayGrid}>
+                {activeProgram.days.map((day, i) => {
+                  const todayDate = new Date().toDateString();
+                  const done = myLogs.some((l) => l.dayName === day.dayName && l.programId === activeProgram.id && new Date(l.timestamp).toDateString() === todayDate);
+                  const inProgress = hasInProgress(activeProgram, i);
+                  return (
+                    <button key={i} style={{ ...S.dayCard, ...(done ? S.dayCardDone : {}), ...(inProgress && !done ? { borderColor: "rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.06)" } : {}) }} onClick={() => handleDayClick(i)}>
+                      {done && <div style={S.doneChk}><I.Check size={14}/></div>}
+                      {inProgress && !done && <div style={{ position: "absolute", top: 8, right: 8, fontSize: 10, color: "#f59e0b", background: "rgba(245,158,11,0.15)", padding: "2px 6px", borderRadius: 6, fontWeight: 700 }}>진행중</div>}
+                      <div style={S.dayNum}>DAY {i + 1}</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{day.dayName}</div>
+                      <div style={{ fontSize: 12, color: "#666" }}>{day.exercises.length}종목</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Version */}
