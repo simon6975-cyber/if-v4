@@ -75,7 +75,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.9.1";
+const APP_VERSION = "v13.9.2";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -87,6 +87,11 @@ const TYPES = {
   circuit: { label: "서킷", color: "#a78bfa", bg: "#1e1b3a", accent: "rgba(167,139,250,0.12)" },
 };
 const NO_LOC = "__none__"; // 장소 지정 없음(공용) 프로그램
+
+// v13.9.2 — 중량 단위. 기구에 표시된 단위를 그대로 쓴다 (환산하지 않음).
+const UNITS = ["kg", "lb"];
+const DEFAULT_UNIT = "kg";
+function normUnit(u) { return UNITS.includes(u) ? u : DEFAULT_UNIT; }
 
 // v13.8.1 — Firebase Realtime DB는 배열을 객체({0:..,1:..})로 돌려줄 수 있다.
 // 어떤 형태로 오든 안전하게 배열로 정규화한다.
@@ -122,6 +127,7 @@ function resolveDayExercises(program, dayIndex, progCustom) {
     return override.map((ex) => ({
       name: ex.name || "",
       note: ex.note || "",
+      unit: normUnit(ex.unit),                       // v13.9.2
       sets: toArray(ex.sets).map((s) => ({ weight: s?.weight || "", reps: s?.reps || "" })),
     }));
   }
@@ -134,6 +140,7 @@ function resolveDayExercises(program, dayIndex, progCustom) {
     return {
       name: ex.name || "",
       note: ex.note || "",
+      unit: normUnit(cv?.unit || ex.unit),           // v13.9.2 — 회원 맞춤 > 프로그램 기본
       sets: Array.from({ length: n }, (_, si) => ({
         weight: cs[si]?.weight || "",
         reps: cs[si]?.reps || ex.reps || "",
@@ -510,7 +517,7 @@ function AdminApp({ members, saveMember, deleteMember, programs, saveProgram, de
       description: base?.description || "",
       daysPerWeek: base?.daysPerWeek || 3,
       days: base?.days ? JSON.parse(JSON.stringify(base.days))
-        : [{ dayName: "Day 1", exercises: [{ name: "", sets: 3, reps: "10", weight: "", note: "" }] }],
+        : [{ dayName: "Day 1", exercises: [{ name: "", sets: 3, reps: "10", weight: "", unit: DEFAULT_UNIT, note: "" }] }],
     });
     return (
       <div style={S.container}>
@@ -634,7 +641,7 @@ function AdminMemberLogs({ member, logs, onBack }) {
                 </div>
                 {expId === log.id && <div style={S.logDet}>{log.exercises?.map((ex, i) => (
                   <div key={i} style={{ marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#ccc", marginBottom: 3 }}>{ex.name}</div>
-                    {ex.sets?.map((s, si) => <div key={si} style={{ fontSize: 12, color: "#777", paddingLeft: 8, fontFamily: "'JetBrains Mono'" }}>세트 {si+1}: {s.weight||"–"}kg × {s.reps||"–"}회</div>)}</div>
+                    {ex.sets?.map((s, si) => <div key={si} style={{ fontSize: 12, color: "#777", paddingLeft: 8, fontFamily: "'JetBrains Mono'" }}>세트 {si+1}: {s.weight||"–"}{normUnit(ex.unit)} × {s.reps||"–"}회</div>)}</div>
                 ))}</div>}
               </div>
             ))}
@@ -751,7 +758,7 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
 
   const addExercise = useCallback((prog, di) => {
     const base = ensureDay(prog, di);
-    setDayExercises(prog.id, di, () => [...base, { name: "", note: "", sets: [{ weight: "", reps: "10" }, { weight: "", reps: "10" }, { weight: "", reps: "10" }] }]);
+    setDayExercises(prog.id, di, () => [...base, { name: "", note: "", unit: DEFAULT_UNIT, sets: [{ weight: "", reps: "10" }, { weight: "", reps: "10" }, { weight: "", reps: "10" }] }]);
   }, [ensureDay, setDayExercises]);
 
   const removeExercise = useCallback((prog, di, ei) => {
@@ -926,6 +933,11 @@ function MemberDayEditor({ prog, dayIndex, dayName, exercises, customized,
             <span style={S.customExNum}>{ei + 1}</span>
             <input style={{ ...S.inputSm, flex: 1, fontWeight: 600 }} placeholder={`운동 ${ei + 1}`}
               value={ex.name} onChange={(e) => onEditEx(prog, dayIndex, ei, "name", e.target.value)}/>
+            {/* v13.9.2 — 이 기구의 중량 단위 */}
+            <select style={{ ...S.inputSm, width: 62, flexShrink: 0, padding: "6px 4px" }} title="중량 단위"
+              value={normUnit(ex.unit)} onChange={(e) => onEditEx(prog, dayIndex, ei, "unit", e.target.value)}>
+              {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
             <button style={{ ...S.iconBtn, color: "#ef4444", padding: 4 }} title="운동 삭제"
               onClick={() => { if (confirm(`"${ex.name || `운동 ${ei + 1}`}"을(를) 삭제할까요?`)) onRemoveEx(prog, dayIndex, ei); }}>
               <I.Trash size={14}/>
@@ -935,7 +947,7 @@ function MemberDayEditor({ prog, dayIndex, dayName, exercises, customized,
           <div style={S.customSetGrid}>
             <div style={S.customSetHeaderRow}>
               <span style={S.customSetHCell}>세트</span>
-              <span style={S.customSetHCellW}>중량(kg)</span>
+              <span style={S.customSetHCellW}>중량({normUnit(ex.unit)})</span>
               <span style={S.customSetHCellW}>횟수</span>
               <span style={{ width: 24 }}/>
             </div>
@@ -943,7 +955,7 @@ function MemberDayEditor({ prog, dayIndex, dayName, exercises, customized,
               <div key={si} style={S.customSetRow}>
                 <span style={S.customSetCell}>{si + 1}</span>
                 <span style={S.customSetCellW}>
-                  <input style={S.customSetInput} type="number" inputMode="decimal" placeholder="kg"
+                  <input style={S.customSetInput} type="number" inputMode="decimal" placeholder={normUnit(ex.unit)}
                     value={s.weight || ""} onChange={(e) => onEditSet(prog, dayIndex, ei, si, "weight", e.target.value)}/>
                 </span>
                 <span style={S.customSetCellW}>
@@ -984,10 +996,10 @@ function ProgramForm({ program, locations = [], programs = [], onSave, onCancel 
   const u = (f, v) => setP((prev) => ({ ...prev, [f]: v }));
   const uDay = (di, f, v) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], [f]: v }; return { ...prev, days: d }; });
   const uEx = (di, ei, f, v) => setP((prev) => { const d = [...prev.days]; const e = [...d[di].exercises]; e[ei] = { ...e[ei], [f]: f === "sets" ? (parseInt(v)||0) : v }; d[di] = { ...d[di], exercises: e }; return { ...prev, days: d }; });
-  const addDay = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: [{ name: "", sets: 3, reps: "10", note: "" }] }] }));
+  const addDay = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: [{ name: "", sets: 3, reps: "10", unit: DEFAULT_UNIT, note: "" }] }] }));
   const copyDay1 = () => setP((prev) => ({ ...prev, days: [...prev.days, { dayName: `Day ${prev.days.length+1}`, exercises: JSON.parse(JSON.stringify(prev.days[0].exercises)) }] }));
   const rmDay = (di) => setP((prev) => ({ ...prev, days: prev.days.filter((_, i) => i !== di) }));
-  const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", note: "" }] }; return { ...prev, days: d }; });
+  const addEx = (di) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: [...d[di].exercises, { name: "", sets: 3, reps: "10", unit: DEFAULT_UNIT, note: "" }] }; return { ...prev, days: d }; });
   const rmEx = (di, ei) => setP((prev) => { const d = [...prev.days]; d[di] = { ...d[di], exercises: d[di].exercises.filter((_, i) => i !== ei) }; return { ...prev, days: d }; });
   // v13.9 — 드래그로 순서 변경
   const moveEx = useCallback((di, from, to) => setP((prev) => {
@@ -1091,6 +1103,11 @@ function ProgramExerciseList({ dayIndex, exercises, uEx, rmEx, moveEx }) {
           <div style={S.exEdRow}>
             <div style={S.mini}><span style={S.miniL}>세트</span>
               <input style={S.inputSm} type="number" inputMode="numeric" value={ex.sets} onChange={(e) => uEx(dayIndex, ei, "sets", e.target.value)}/></div>
+            {/* v13.9.2 — 기구에 표시된 중량 단위 (환산 없음) */}
+            <div style={S.mini}><span style={S.miniL}>중량 단위</span>
+              <select style={S.inputSm} value={normUnit(ex.unit)} onChange={(e) => uEx(dayIndex, ei, "unit", e.target.value)}>
+                {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select></div>
           </div>
           <input style={S.inputSm} placeholder="참고사항 (선택)" value={ex.note} onChange={(e) => uEx(dayIndex, ei, "note", e.target.value)}/>
         </div>
@@ -1337,12 +1354,14 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, o
         // 구조가 같을 때만 복원 (관리자가 종목을 바꿨으면 새로 시작)
         const matches = saved.exData.length === dayExercises.length &&
           saved.exData.every((e, i) => e.name === dayExercises[i].name);
-        if (matches) return saved.exData;
+        // v13.9.2 — 예전 세션엔 unit 이 없으므로 프로그램 설정으로 채워 준다
+        if (matches) return saved.exData.map((e, i) => ({ ...e, unit: normUnit(e.unit || dayExercises[i].unit) }));
       }
     } catch {}
     // Fresh init — 맞춤 목록 기준
     return dayExercises.map((ex) => ({
       name: ex.name,
+      unit: normUnit(ex.unit),                       // v13.9.2 — 기구 단위 (kg/lb)
       sets: toArray(ex.sets).map((s) => ({ weight: s.weight || "", reps: s.reps || "", done: false })),
       targetReps: toArray(ex.sets)[0]?.reps || "",
       note: ex.note,
@@ -1366,6 +1385,8 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, o
   const clearSession = useCallback(() => { try { localStorage.removeItem(sessionKey); } catch {} }, [sessionKey]);
 
   const uSet = (ei, si, f, v) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], sets: [...n[ei].sets] }; n[ei].sets[si] = { ...n[ei].sets[si], [f]: v }; return n; });
+  // v13.9.2 — 이 운동의 중량 단위 전환 (숫자는 그대로 두고 단위만 바꾼다)
+  const setUnit = (ei, u) => setExData((prev) => { const n = [...prev]; n[ei] = { ...n[ei], unit: normUnit(u) }; return n; });
   const toggleDone = (ei, si) => { uSet(ei, si, "done", !exData[ei].sets[si].done); };
 
   const total = exData.reduce((a, e) => a + e.sets.length, 0);
@@ -1390,7 +1411,8 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, o
     onFinish({ memberId, programId: program.id, programName: program.name, dayName: day.dayName, level: program.level,
       timestamp: startTime, startTime, endTime, date: new Date(startTime).toISOString().split("T")[0],
       ...(location ? { location } : {}),
-      exercises: exData.map((e) => ({ name: e.name, sets: e.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps })) })) });
+      exercises: exData.map((e) => ({ name: e.name, unit: normUnit(e.unit),
+        sets: e.sets.filter((s) => s.done).map((s) => ({ weight: s.weight, reps: s.reps })) })) });
   };
 
   return (
@@ -1418,10 +1440,24 @@ function WorkoutSession({ program, dayIndex, memberId, memberCustom, location, o
         return <button key={i} style={{ ...S.exTab, ...(i === activeEx ? S.exTabOn : {}), ...(allDone ? S.exTabDone : {}) }} onClick={() => setActiveEx(i)}>{allDone ? "✓" : i + 1}</button>;
       })}</div>
       <div style={S.curEx}>
-        <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}><span style={S.exNumDisplay}>{activeEx + 1}</span>{ex.name}</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 8px" }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: 0, flex: 1 }}><span style={S.exNumDisplay}>{activeEx + 1}</span>{ex.name}</h3>
+          {/* v13.9.2 — 기구에 표시된 단위로 그때그때 전환 (환산 없음) */}
+          <div style={{ display: "flex", gap: 0, flexShrink: 0, border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, overflow: "hidden" }}>
+            {UNITS.map((u) => {
+              const on = normUnit(ex.unit) === u;
+              return (
+                <button key={u} onClick={() => setUnit(activeEx, u)}
+                  style={{ padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none",
+                    background: on ? "rgba(106,159,216,0.2)" : "transparent",
+                    color: on ? "#6a9fd8" : "#666", fontFamily: "'JetBrains Mono', monospace" }}>{u}</button>
+              );
+            })}
+          </div>
+        </div>
         {ex.note && <div style={S.exNote}>{ex.note}</div>}
         <div style={{ marginTop: 12 }}>
-          <div style={S.setHead}><span style={S.setHC}>세트</span><span style={S.setHCW}>무게(kg)</span><span style={S.setHCW}>횟수</span><span style={S.setHC}>완료</span></div>
+          <div style={S.setHead}><span style={S.setHC}>세트</span><span style={S.setHCW}>무게({normUnit(ex.unit)})</span><span style={S.setHCW}>횟수</span><span style={S.setHC}>완료</span></div>
           {ex.sets.map((s, si) => (
             <div key={si} style={{ ...S.setRow, ...(s.done ? S.setRowDone : {}) }}>
               <span style={S.setC}>{si + 1}</span>
@@ -1473,7 +1509,7 @@ function HistoryView({ logs, onBack }) {
                 </button>
                 {expId === log.id && <div style={S.logDet}>{log.exercises?.map((ex, i) => (
                   <div key={i} style={{ marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#ccc", marginBottom: 3 }}>{ex.name}</div>
-                    {ex.sets?.map((s, si) => <div key={si} style={{ fontSize: 12, color: "#777", paddingLeft: 8, fontFamily: "'JetBrains Mono'" }}>세트 {si+1}: {s.weight||"–"}kg × {s.reps||"–"}회</div>)}</div>
+                    {ex.sets?.map((s, si) => <div key={si} style={{ fontSize: 12, color: "#777", paddingLeft: 8, fontFamily: "'JetBrains Mono'" }}>세트 {si+1}: {s.weight||"–"}{normUnit(ex.unit)} × {s.reps||"–"}회</div>)}</div>
                 ))}</div>}
               </div>
             ))}
