@@ -75,7 +75,7 @@ const I = {
 };
 
 const ADMIN_PIN = "0000";
-const APP_VERSION = "v13.9.2";
+const APP_VERSION = "v13.9.3";
 const LEVELS = {
   beginner: { label: "초급", color: "#22c55e", bg: "#052e16", accent: "rgba(34,197,94,0.12)" },
   intermediate: { label: "중급", color: "#f59e0b", bg: "#451a03", accent: "rgba(245,158,11,0.12)" },
@@ -673,6 +673,7 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
   // v13.8.1 — 배정 상태는 항상 resolver로 계산 (구버전 데이터도 그대로 인식)
   const assignedKeys = useMemo(() => memberGroupKeys(m, programs), [m, programs]);
   const [openGroup, setOpenGroup] = useState(null); // 세부 설정 펼친 그룹
+  const [openLoc, setOpenLoc] = useState(null);     // v13.9.3 — 펼친 장소 변형 id (기본: 모두 접힘)
 
   // 그룹 배정 토글 — 배정 시 그 그룹의 모든 장소 변형에 대해 기본 세트값 생성
   const toggleGroup = (g) => {
@@ -856,7 +857,7 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
               </div>
               {on && (
                 <button style={{ background: "none", border: "none", color: "#6a9fd8", fontSize: 11, cursor: "pointer", fontFamily: "'Noto Sans KR', sans-serif", padding: "4px 6px", flexShrink: 0, textDecoration: "underline" }}
-                  onClick={() => setOpenGroup(open ? null : g.key)}>
+                  onClick={() => { setOpenGroup(open ? null : g.key); setOpenLoc(null); }}>
                   {open ? "설정 닫기" : "맞춤 설정"}
                 </button>
               )}
@@ -868,24 +869,39 @@ function MemberForm({ member, programs, locations = [], onSave, onCancel }) {
                 <p style={{ fontSize: 11, color: "#666", margin: "0 0 12px", lineHeight: 1.5 }}>
                   표준 프로그램을 이 회원에 맞게 고칠 수 있습니다. 종목 추가·삭제·이름 변경, <I.Grip size={11}/> 손잡이를 끌어 순서 변경,
                   세트별 중량/횟수 설정까지 가능합니다. 여기서 고친 내용은 <b style={{ color: "#888" }}>이 회원에게만</b> 적용됩니다.
+                  <br/><span style={{ color: "#555" }}>장소를 눌러 해당 장소의 운동 프로그램을 펼쳐보세요.</span>
                 </p>
-                {g.variants.map((prog) => (
-                  <div key={prog.id} style={{ marginBottom: 16 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                      <I.MapPin size={13}/>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#a78bfa" }}>{locLabel(prog.locationId)}</span>
-                      <span style={{ fontSize: 11, color: "#555" }}>루틴 {toArray(prog.days).length}개</span>
+                {/* v13.9.3 — 장소별로 기본 접힘. 장소 헤더를 누르면 그 장소만 펼쳐진다. */}
+                {g.variants.map((prog) => {
+                  const locOpen = openLoc === prog.id;
+                  const customCount = toArray(prog.days).filter((_, di) => isCustomized(prog, di)).length;
+                  return (
+                    <div key={prog.id} style={{ marginBottom: 8, border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, overflow: "hidden" }}>
+                      <button style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", cursor: "pointer",
+                        background: locOpen ? "rgba(167,139,250,0.08)" : "rgba(255,255,255,0.02)", border: "none",
+                        fontFamily: "'Noto Sans KR', sans-serif", color: "#e8e8e8", textAlign: "left" }}
+                        onClick={() => setOpenLoc(locOpen ? null : prog.id)}>
+                        <I.MapPin size={14}/>
+                        <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: locOpen ? "#a78bfa" : "#ccc" }}>{locLabel(prog.locationId)}</span>
+                        <span style={{ fontSize: 11, color: "#555" }}>루틴 {toArray(prog.days).length}개</span>
+                        {customCount > 0 && <span style={{ fontSize: 10, color: "#22c55e", background: "rgba(34,197,94,0.1)", padding: "2px 7px", borderRadius: 6, fontWeight: 700 }}>맞춤 {customCount}</span>}
+                        <span style={{ color: "#666", fontSize: 15, transition: "transform 0.2s", transform: locOpen ? "rotate(180deg)" : "none" }}>▾</span>
+                      </button>
+                      {locOpen && (
+                        <div style={{ padding: "4px 12px 12px" }}>
+                          {toArray(prog.days).map((day, di) => (
+                            <MemberDayEditor key={di} prog={prog} dayIndex={di} dayName={day.dayName}
+                              exercises={dayExercisesFor(prog, di)}
+                              customized={isCustomized(prog, di)}
+                              onEditEx={editEx} onEditSet={editSet}
+                              onAddEx={addExercise} onRemoveEx={removeExercise} onMoveEx={moveExercise}
+                              onAddSet={addSet} onRemoveSet={removeSet} onReset={resetDay}/>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {toArray(prog.days).map((day, di) => (
-                      <MemberDayEditor key={di} prog={prog} dayIndex={di} dayName={day.dayName}
-                        exercises={dayExercisesFor(prog, di)}
-                        customized={isCustomized(prog, di)}
-                        onEditEx={editEx} onEditSet={editSet}
-                        onAddEx={addExercise} onRemoveEx={removeExercise} onMoveEx={moveExercise}
-                        onAddSet={addSet} onRemoveSet={removeSet} onReset={resetDay}/>
-                    ))}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
